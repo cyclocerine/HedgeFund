@@ -87,8 +87,27 @@ Untuk penggunaan otomatis atau scripting:
 ```bash
 cd scripts
 python run_cli.py --ticker AAPL --days 30 --strategy "Trend Following" --allow-short True
-```
 
+#Untuk Memprediksi gunakan perintah
+python scripts/run_cli.py --ticker ADRO.JK --model transformer --lookback 30 --forecast_days 10 --save
+```
+### Parameter CLI
+
+---
+
+| Argumen        | Keterangan                            | Contoh             |
+|----------------|----------------------------------------|--------------------|
+| `--ticker`     | Simbol saham/komoditas                 | `AAPL`, `ADRO.JK`  |
+| `--start_date` | Tanggal awal data historis (YYYY-MM-DD)| `2020-01-01`       |
+| `--end_date`   | Tanggal akhir data historis            | `2024-12-31`       |
+| `--model`      | Jenis model yang digunakan             | `cnn_lstm`, `bilstm`, `transformer`, `ensemble` |
+| `--lookback`   | Jumlah hari historis untuk input model | `60`               |
+| `--forecast`   | Jumlah hari ke depan untuk prediksi    | `20`               |
+| `--tune`       | Aktifkan hyperparameter tuning         | `True` / `False`   |
+| `--rl`         | Gunakan Reinforcement Learning         | `True` / `False`   |
+| `--episodes`   | Jumlah episode untuk training RL       | `100`              |
+
+---
 Parameter yang tersedia:
 - `--ticker`: Kode saham atau aset (contoh: AAPL, MSFT, BTC-USD)
 - `--days`: Jumlah hari data historis (default: 365)
