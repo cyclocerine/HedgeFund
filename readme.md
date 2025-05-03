@@ -1,3 +1,5 @@
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/N4N51EF9I0)![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![TensorFlow](https://img.shields.io/badge/TensorFlow-%23FF6F00.svg?style=for-the-badge&logo=TensorFlow&logoColor=white)
 # 🤖💹 AI Hedge Fund
 
 Sistem kecerdasan buatan untuk manajemen portofolio dan perdagangan otomatis berbasis machine learning dengan kemampuan adaptasi tinggi pada berbagai kondisi pasar.
