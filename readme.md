@@ -596,8 +596,8 @@ Kontribusi selalu disambut! Silakan:
 - *Technical Analysis of the Financial Markets* oleh John J. Murphy
 
 ---
-
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/N4N51EF9I0)
 <div align="center">
   <p><strong>AI Hedge Fund</strong> - Trading Algoritmik Cerdas untuk Era Digital</p>
 </div> 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/N4N51EF9I0)
+
