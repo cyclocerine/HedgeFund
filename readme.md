@@ -69,8 +69,7 @@ pip install -r requirements.txt
 Aplikasi GUI menyediakan antarmuka visual lengkap untuk berinteraksi dengan sistem:
 
 ```bash
-cd scripts
-python run_app.py
+python scripts/run_app.py
 ```
 
 Melalui GUI, Anda dapat:
@@ -85,8 +84,7 @@ Melalui GUI, Anda dapat:
 Untuk penggunaan otomatis atau scripting:
 
 ```bash
-cd scripts
-python run_cli.py --ticker AAPL --days 30 --strategy "Trend Following" --allow-short True
+python scripts/run_cli.py --ticker AAPL --days 30 --strategy "Trend Following" --allow-short True
 
 #Untuk Memprediksi gunakan perintah
 python scripts/run_cli.py --ticker ADRO.JK --model transformer --lookback 30 --forecast_days 10 --save
@@ -116,7 +114,6 @@ Parameter yang tersedia:
 - `--risk-level`: Level risiko (1-5, dimana 1 paling konservatif)
 - `--output`: Format output (json, csv, txt)
 
-### Contoh Penggunaan API
 
 #### 1. Backtesting Strategi Tunggal
 

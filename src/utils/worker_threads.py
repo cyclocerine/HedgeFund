@@ -59,7 +59,9 @@ class BacktestWorker(QThread):
     progress = pyqtSignal(int)
     error = pyqtSignal(str)
     
-    def __init__(self, predictor, initial_investment, strategy):
+    def __init__(self, predictor, initial_investment, strategy, transaction_fee=0.001, 
+                 allow_short=False, max_position_size=0.2, stop_loss=0.05, 
+                 trailing_stop=0.03, max_drawdown=0.1, max_capital_per_trade=0.2):
         """
         Inisialisasi worker thread
         
@@ -71,11 +73,32 @@ class BacktestWorker(QThread):
             Jumlah investasi awal
         strategy : str
             Nama strategi trading yang akan digunakan
+        transaction_fee : float, optional
+            Biaya transaksi sebagai persentase, default 0.001 (0.1%)
+        allow_short : bool, optional
+            Mengizinkan short selling, default False
+        max_position_size : float, optional
+            Ukuran posisi maksimum sebagai persentase portofolio, default 0.2 (20%)
+        stop_loss : float, optional
+            Persentase stop loss, default 0.05 (5%)
+        trailing_stop : float, optional
+            Persentase trailing stop, default 0.03 (3%)
+        max_drawdown : float, optional
+            Persentase drawdown maksimum, default 0.1 (10%)
+        max_capital_per_trade : float, optional
+            Persentase maksimum kapital per perdagangan, default 0.2 (20%)
         """
         super().__init__()
         self.predictor = predictor
         self.initial_investment = initial_investment
         self.strategy = strategy
+        self.transaction_fee = transaction_fee
+        self.allow_short = allow_short
+        self.max_position_size = max_position_size
+        self.stop_loss = stop_loss
+        self.trailing_stop = trailing_stop
+        self.max_drawdown = max_drawdown
+        self.max_capital_per_trade = max_capital_per_trade
         
     def run(self):
         """Jalankan proses backtesting"""
@@ -99,9 +122,42 @@ class BacktestWorker(QThread):
             
             self.progress.emit(30)
             
-            # Run backtest
-            portfolio_values, trades, performance = self.run_backtest(
-                actual_prices, predicted_prices, self.initial_investment, self.strategy
+            # Import backtester untuk menggunakan implementasi yang lebih canggih
+            from src.trading.backtest import Backtester
+            
+            # Dapatkan dates dari predictor jika tersedia
+            dates = None
+            if hasattr(self.predictor, 'test_dates'):
+                dates = self.predictor.test_dates
+            
+            # Buat instance backtester dengan parameter baru
+            backtester = Backtester(
+                actual_prices=actual_prices,
+                predicted_prices=predicted_prices,
+                initial_investment=self.initial_investment,
+                transaction_fee=self.transaction_fee,
+                dates=dates
+            )
+            
+            # Buat risk manager
+            from src.trading.risk_manager import RiskManager
+            risk_manager = RiskManager(
+                max_drawdown=self.max_drawdown,
+                max_position_size=self.max_position_size,
+                stop_loss=self.stop_loss,
+                trailing_stop=self.trailing_stop,
+                max_capital_per_trade=self.max_capital_per_trade
+            )
+            
+            # Set risk manager ke backtester
+            backtester.risk_manager = risk_manager
+            
+            # Jalankan backtest
+            self.progress.emit(50)
+            portfolio_values, trades, performance = backtester.run(
+                strategy=self.strategy,
+                allow_short=self.allow_short,
+                max_position_size=self.max_position_size
             )
             
             self.progress.emit(100)
@@ -110,103 +166,6 @@ class BacktestWorker(QThread):
             self.finished.emit(portfolio_values, trades, performance)
         except Exception as e:
             self.error.emit(str(e))
-    
-    def run_backtest(self, actual_prices, predicted_prices, initial_investment, strategy):
-        """Implementasi backtest"""
-        # Inisialisasi portfolio
-        cash = initial_investment
-        shares = 0
-        portfolio_values = []
-        trades = []
-        
-        # Iterasi melalui harga historis
-        for i in range(1, len(actual_prices)):
-            # Hitung nilai portfolio saat ini
-            portfolio_value = cash + shares * actual_prices[i]
-            portfolio_values.append(portfolio_value)
-            
-            # Generate signal
-            signal = self.generate_signal(predicted_prices, actual_prices, i, strategy)
-            
-            # Proses signals
-            if signal == 'BUY' and cash > 0:
-                # Beli saham sebanyak mungkin dengan uang yang ada
-                shares_to_buy = cash / actual_prices[i]
-                shares += shares_to_buy
-                cash = 0
-                trades.append({
-                    'day': i,
-                    'type': 'BUY',
-                    'price': actual_prices[i],
-                    'shares': shares_to_buy,
-                    'value': shares_to_buy * actual_prices[i]
-                })
-            elif signal == 'SELL' and shares > 0:
-                # Jual semua saham
-                cash += shares * actual_prices[i]
-                trades.append({
-                    'day': i,
-                    'type': 'SELL',
-                    'price': actual_prices[i],
-                    'shares': shares,
-                    'value': shares * actual_prices[i]
-                })
-                shares = 0
-        
-        # Nilai akhir portfolio
-        final_value = cash + shares * actual_prices[-1]
-        
-        # Menghitung metrik performa
-        # Menghitung return total
-        total_return = (final_value - initial_investment) / initial_investment * 100
-        
-        # Menghitung drawdown
-        peak = portfolio_values[0] if portfolio_values else initial_investment
-        drawdown = 0
-        for value in portfolio_values:
-            if value > peak:
-                peak = value
-            dd = (peak - value) / peak * 100
-            drawdown = max(drawdown, dd)
-        
-        # Menghitung profit/loss per trade
-        win_trades = 0
-        loss_trades = 0
-        for i in range(0, len(trades), 2):
-            if i+1 < len(trades):
-                buy = trades[i]
-                sell = trades[i+1]
-                profit = sell['value'] - buy['value']
-                if profit > 0:
-                    win_trades += 1
-                else:
-                    loss_trades += 1
-        
-        win_rate = 0
-        if win_trades + loss_trades > 0:
-            win_rate = win_trades / (win_trades + loss_trades) * 100
-        
-        performance = {
-            'initial_investment': initial_investment,
-            'final_value': final_value,
-            'total_return': total_return,
-            'max_drawdown': drawdown,
-            'win_rate': win_rate,
-            'num_trades': len(trades)
-        }
-        
-        return portfolio_values, trades, performance
-
-    def generate_signal(self, predicted_prices, actual_prices, index, strategy):
-        """Generate signal berdasarkan strategi"""
-        from src.trading.strategies import TradingStrategy
-        
-        strategy_function = TradingStrategy.get_strategy_function(strategy)
-        # Inisialisasi params untuk menghindari NoneType error
-        params = {}
-        if strategy.lower() == 'ppo':
-            params = {'training_done': False}
-        return strategy_function(predicted_prices, actual_prices, index, params)
 
 class StrategyOptimizerWorker(QThread):
     """Thread worker untuk menjalankan optimasi strategi"""

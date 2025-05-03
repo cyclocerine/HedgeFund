@@ -8,7 +8,8 @@ Modul ini berisi implementasi tab backtesting untuk UI aplikasi.
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, 
                              QPushButton, QProgressBar, QDoubleSpinBox, QMessageBox,
                              QTableWidget, QTableWidgetItem, QFrame, QSplitter, QGroupBox,
-                             QHeaderView, QFileDialog, QSpinBox, QToolButton, QSizePolicy)
+                             QHeaderView, QFileDialog, QSpinBox, QToolButton, QSizePolicy,
+                             QCheckBox, QGridLayout)
 from PyQt5.QtCore import Qt, pyqtSlot, QSize
 from PyQt5.QtGui import QColor, QBrush, QFont, QIcon
 from matplotlib.figure import Figure
@@ -49,20 +50,23 @@ class BacktestTab(QWidget):
         params_group = StyledGroupBox("Parameter Backtesting")
         control_layout.addWidget(params_group)
         
-        params_layout = QHBoxLayout(params_group)
-        params_layout.setSpacing(20)
+        # Ubah layout ke grid untuk parameter yang lebih banyak
+        params_layout = QGridLayout(params_group)
+        params_layout.setSpacing(10)
+        
+        # Kolom 1 - Parameter strategi
+        col = 0
+        row = 0
         
         # Strategy selection
-        strategy_layout = QVBoxLayout()
         strategy_label = QLabel("Strategi Trading:")
         self.strategy_combo = QComboBox()
         self.strategy_combo.addItems(['trend_following', 'mean_reversion', 'predictive', 'PPO'])
-        strategy_layout.addWidget(strategy_label)
-        strategy_layout.addWidget(self.strategy_combo)
-        params_layout.addLayout(strategy_layout)
+        params_layout.addWidget(strategy_label, row, col)
+        params_layout.addWidget(self.strategy_combo, row+1, col)
         
         # Initial investment
-        investment_layout = QVBoxLayout()
+        row += 2
         investment_label = QLabel("Modal Awal:")
         self.investment_spin = QDoubleSpinBox()
         self.investment_spin.setRange(1000, 10000000)
@@ -70,33 +74,88 @@ class BacktestTab(QWidget):
         self.investment_spin.setSingleStep(1000)
         self.investment_spin.setPrefix("Rp ")
         self.investment_spin.setGroupSeparatorShown(True)
-        investment_layout.addWidget(investment_label)
-        investment_layout.addWidget(self.investment_spin)
-        params_layout.addLayout(investment_layout)
-        
-        # Risk parameters
-        risk_layout = QVBoxLayout()
-        risk_label = QLabel("Risk (%):")
-        self.risk_spin = QDoubleSpinBox()
-        self.risk_spin.setRange(0.1, 10)
-        self.risk_spin.setValue(2)
-        self.risk_spin.setSingleStep(0.1)
-        self.risk_spin.setSuffix(" %")
-        risk_layout.addWidget(risk_label)
-        risk_layout.addWidget(self.risk_spin)
-        params_layout.addLayout(risk_layout)
+        params_layout.addWidget(investment_label, row, col)
+        params_layout.addWidget(self.investment_spin, row+1, col)
         
         # Commission fee
-        commission_layout = QVBoxLayout()
+        row += 2
         commission_label = QLabel("Komisi (%):")
         self.commission_spin = QDoubleSpinBox()
         self.commission_spin.setRange(0, 2)
         self.commission_spin.setValue(0.15)
         self.commission_spin.setSingleStep(0.05)
         self.commission_spin.setSuffix(" %")
-        commission_layout.addWidget(commission_label)
-        commission_layout.addWidget(self.commission_spin)
-        params_layout.addLayout(commission_layout)
+        params_layout.addWidget(commission_label, row, col)
+        params_layout.addWidget(self.commission_spin, row+1, col)
+                
+        # Kolom 2 - Parameter risk management
+        col = 1
+        row = 0
+        
+        # Risk - Max Position Size
+        position_size_label = QLabel("Ukuran Posisi Maks (%):")
+        self.position_size_spin = QDoubleSpinBox()
+        self.position_size_spin.setRange(0.1, 100)
+        self.position_size_spin.setValue(20)
+        self.position_size_spin.setSingleStep(5)
+        self.position_size_spin.setSuffix(" %")
+        params_layout.addWidget(position_size_label, row, col)
+        params_layout.addWidget(self.position_size_spin, row+1, col)
+        
+        # Stop Loss
+        row += 2
+        stop_loss_label = QLabel("Stop Loss (%):")
+        self.stop_loss_spin = QDoubleSpinBox()
+        self.stop_loss_spin.setRange(0.1, 20)
+        self.stop_loss_spin.setValue(5)
+        self.stop_loss_spin.setSingleStep(0.5)
+        self.stop_loss_spin.setSuffix(" %")
+        params_layout.addWidget(stop_loss_label, row, col)
+        params_layout.addWidget(self.stop_loss_spin, row+1, col)
+        
+        # Trailing Stop
+        row += 2
+        trailing_stop_label = QLabel("Trailing Stop (%):")
+        self.trailing_stop_spin = QDoubleSpinBox()
+        self.trailing_stop_spin.setRange(0.1, 20)
+        self.trailing_stop_spin.setValue(3)
+        self.trailing_stop_spin.setSingleStep(0.5)
+        self.trailing_stop_spin.setSuffix(" %")
+        params_layout.addWidget(trailing_stop_label, row, col)
+        params_layout.addWidget(self.trailing_stop_spin, row+1, col)
+        
+        # Kolom 3 - Parameter tambahan
+        col = 2
+        row = 0
+        
+        # Short selling enabled
+        short_selling_label = QLabel("Short Selling:")
+        self.short_selling_check = QCheckBox("Aktifkan")
+        self.short_selling_check.setChecked(False)
+        params_layout.addWidget(short_selling_label, row, col)
+        params_layout.addWidget(self.short_selling_check, row+1, col)
+        
+        # Max Drawdown
+        row += 2
+        max_drawdown_label = QLabel("Max Drawdown (%):")
+        self.max_drawdown_spin = QDoubleSpinBox()
+        self.max_drawdown_spin.setRange(1, 50)
+        self.max_drawdown_spin.setValue(10)
+        self.max_drawdown_spin.setSingleStep(1)
+        self.max_drawdown_spin.setSuffix(" %")
+        params_layout.addWidget(max_drawdown_label, row, col)
+        params_layout.addWidget(self.max_drawdown_spin, row+1, col)
+        
+        # Max Capital per Trade
+        row += 2
+        max_capital_label = QLabel("Kapital per Trade (%):")
+        self.max_capital_spin = QDoubleSpinBox()
+        self.max_capital_spin.setRange(1, 100)
+        self.max_capital_spin.setValue(20)
+        self.max_capital_spin.setSingleStep(5)
+        self.max_capital_spin.setSuffix(" %")
+        params_layout.addWidget(max_capital_label, row, col)
+        params_layout.addWidget(self.max_capital_spin, row+1, col)
         
         # Action controls
         action_layout = QHBoxLayout()
@@ -238,14 +297,28 @@ class BacktestTab(QWidget):
         # Get parameters
         strategy = self.strategy_combo.currentText()
         initial_investment = self.investment_spin.value()
-        risk_pct = self.risk_spin.value()
-        commission = self.commission_spin.value()
+        commission = self.commission_spin.value() / 100  # Convert to decimal
         
-        # Create and start worker thread
+        # Get risk management parameters
+        max_position_size = self.position_size_spin.value() / 100  # Convert to decimal
+        stop_loss = self.stop_loss_spin.value() / 100
+        trailing_stop = self.trailing_stop_spin.value() / 100
+        max_drawdown = self.max_drawdown_spin.value() / 100
+        max_capital_per_trade = self.max_capital_spin.value() / 100
+        allow_short = self.short_selling_check.isChecked()
+        
+        # Create and start worker thread with new parameters
         self.worker = BacktestWorker(
             self.predictor, 
             initial_investment, 
-            strategy
+            strategy,
+            transaction_fee=commission,
+            allow_short=allow_short,
+            max_position_size=max_position_size,
+            stop_loss=stop_loss,
+            trailing_stop=trailing_stop,
+            max_drawdown=max_drawdown,
+            max_capital_per_trade=max_capital_per_trade
         )
         self.worker.finished.connect(self.on_backtest_finished)
         self.worker.progress.connect(self.update_backtest_progress)

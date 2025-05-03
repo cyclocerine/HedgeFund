@@ -13,6 +13,7 @@ from .prediction_tab import PredictionTab
 from .backtest_tab import BacktestTab
 from .optimizer_tab import OptimizerTab
 from .forecast_tab import ForecastTab
+from .portfolio_tab import PortfolioTab
 from .styles import MAIN_STYLESHEET, DARK_STYLESHEET
 
 class StockPredictionApp(QMainWindow):
@@ -28,7 +29,7 @@ class StockPredictionApp(QMainWindow):
             Nama style yang digunakan (fusion, windows, dll)
         """
         super().__init__()
-        self.setWindowTitle("Stock Price Prediction - Analysis Tool")
+        self.setWindowTitle("AI Hedge Fund - Trading System")
         self.setGeometry(100, 100, 1280, 900)
         
         # Simpan pengaturan tema
@@ -72,11 +73,15 @@ class StockPredictionApp(QMainWindow):
         self.forecast_tab = ForecastTab()
         self.tabs.addTab(self.forecast_tab, "Trading Prediksi")
         
+        # Tab untuk portofolio multi-aset
+        self.portfolio_tab = PortfolioTab()
+        self.tabs.addTab(self.portfolio_tab, "Portofolio Multi-Aset")
+        
         # Hubungkan tab prediction dengan backtest dan forecast
         self.prediction_tab.prediction_finished.connect(self._handle_prediction_finished)
         
         # Set status bar
-        self.statusBar().showMessage("Siap untuk melakukan analisis saham")
+        self.statusBar().showMessage("Siap untuk melakukan analisis dan trading")
         
         # Buat menu
         self._create_menus()
@@ -87,7 +92,7 @@ class StockPredictionApp(QMainWindow):
         header_layout = QVBoxLayout(header_widget)
         header_layout.setContentsMargins(0, 0, 0, 10)
         
-        title_label = QLabel("Stock Price Prediction")
+        title_label = QLabel("AI Hedge Fund")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setFont(QFont("Arial", 16, QFont.Bold))
         
@@ -96,7 +101,7 @@ class StockPredictionApp(QMainWindow):
         else:
             title_label.setStyleSheet("color: #2c3e50;")
         
-        subtitle_label = QLabel("Analisis dan Prediksi Harga Saham dengan Deep Learning")
+        subtitle_label = QLabel("Trading Algoritmik dengan Manajemen Risiko Adaptif")
         subtitle_label.setAlignment(Qt.AlignCenter)
         subtitle_label.setFont(QFont("Arial", 10))
         
@@ -138,6 +143,11 @@ class StockPredictionApp(QMainWindow):
         download_action = QAction("Download Data", self)
         download_action.setStatusTip("Download data saham dari sumber eksternal")
         tools_menu.addAction(download_action)
+        
+        # Action untuk manajemen risiko
+        risk_action = QAction("Risk Calculator", self)
+        risk_action.setStatusTip("Kalkulator risiko dan ukuran posisi")
+        tools_menu.addAction(risk_action)
         
         # Menu bantuan
         help_menu = menu_bar.addMenu("Bantuan")
