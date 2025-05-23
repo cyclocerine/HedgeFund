@@ -1,4 +1,4 @@
-yfinance>=0.2.3
+yfinance>=0.2.61
 tensorflow>=2.9.0
 keras>=2.9.0
 scikit-learn>=1.0.2
