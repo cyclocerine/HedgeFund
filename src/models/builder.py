@@ -11,6 +11,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout, Conv1D, MaxPooling1D, 
 from tensorflow.keras.layers import Input, Bidirectional, Concatenate, GlobalAveragePooling1D, MultiHeadAttention
 from tensorflow.keras.layers import LayerNormalization, Add
 from tensorflow.keras.optimizers import Adam
+from .patchtst_model import PatchTSTWrapper
 
 class ModelBuilder:
     @staticmethod
@@ -129,4 +130,10 @@ class ModelBuilder:
         
         model = Model(inputs=inputs, outputs=outputs)
         model.compile(optimizer=Adam(0.001), loss='mean_squared_error')
-        return model 
+        return model
+
+    @staticmethod
+    def build_patchtst(input_shape, **kwargs):
+        """Placeholder builder untuk PatchTST (PyTorch)"""
+        # Model PyTorch di-handle di luar pipeline Keras
+        return None 

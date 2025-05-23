@@ -8,7 +8,7 @@ Modul ini berisi implementasi tab prediksi untuk UI aplikasi.
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QDateEdit, QComboBox, QSpinBox, QCheckBox, QPushButton, 
                              QProgressBar, QMessageBox, QFrame, QSplitter, QGroupBox,
-                             QFileDialog, QToolButton, QSizePolicy)
+                             QFileDialog, QToolButton, QSizePolicy, QScrollArea)
 from PyQt5.QtCore import QDate, pyqtSignal, Qt
 from PyQt5.QtGui import QFont, QIcon
 from matplotlib.figure import Figure
@@ -127,10 +127,61 @@ class PredictionTab(QWidget):
         model_layout = QVBoxLayout()
         model_label = QLabel("Model Type:")
         self.model_combo = QComboBox()
-        self.model_combo.addItems(['cnn_lstm', 'bilstm', 'transformer', 'ensemble'])
+        self.model_combo.addItems(['cnn_lstm', 'bilstm', 'transformer', 'ensemble', 'patchtst'])
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo)
         params_layout.addLayout(model_layout)
+        
+        # Tambahkan opsi tuning powerfull khusus PatchTST
+        self.patchtst_tuning_group = StyledGroupBox("PatchTST Hyperparameter Tuning")
+        patchtst_tuning_layout = QVBoxLayout(self.patchtst_tuning_group)
+        self.patchtst_tuning_group.setVisible(False)
+        # Range patch_len
+        patch_len_label = QLabel("Patch Length (list, pisahkan koma):")
+        self.patch_len_input = QLineEdit("8,16,32")
+        patchtst_tuning_layout.addWidget(patch_len_label)
+        patchtst_tuning_layout.addWidget(self.patch_len_input)
+        # Range stride
+        stride_label = QLabel("Stride (list, pisahkan koma):")
+        self.stride_input = QLineEdit("4,8")
+        patchtst_tuning_layout.addWidget(stride_label)
+        patchtst_tuning_layout.addWidget(self.stride_input)
+        # Range d_model
+        d_model_label = QLabel("d_model (list, pisahkan koma):")
+        self.d_model_input = QLineEdit("64,128,256")
+        patchtst_tuning_layout.addWidget(d_model_label)
+        patchtst_tuning_layout.addWidget(self.d_model_input)
+        # Range n_heads
+        n_heads_label = QLabel("n_heads (list, pisahkan koma):")
+        self.n_heads_input = QLineEdit("2,4,8")
+        patchtst_tuning_layout.addWidget(n_heads_label)
+        patchtst_tuning_layout.addWidget(self.n_heads_input)
+        # Range n_layers
+        n_layers_label = QLabel("n_layers (list, pisahkan koma):")
+        self.n_layers_input = QLineEdit("1,2,3")
+        patchtst_tuning_layout.addWidget(n_layers_label)
+        patchtst_tuning_layout.addWidget(self.n_layers_input)
+        # Range dropout
+        dropout_label = QLabel("Dropout (list, pisahkan koma):")
+        self.dropout_input = QLineEdit("0.1,0.2,0.3")
+        patchtst_tuning_layout.addWidget(dropout_label)
+        patchtst_tuning_layout.addWidget(self.dropout_input)
+        # Range lr
+        lr_label = QLabel("Learning Rate (list, pisahkan koma):")
+        self.lr_input = QLineEdit("0.001,0.0005,0.0001")
+        patchtst_tuning_layout.addWidget(lr_label)
+        patchtst_tuning_layout.addWidget(self.lr_input)
+        # Max trials
+        max_trials_label = QLabel("Max Trials:")
+        self.max_trials_input = QSpinBox()
+        self.max_trials_input.setRange(1, 100)
+        self.max_trials_input.setValue(10)
+        patchtst_tuning_layout.addWidget(max_trials_label)
+        patchtst_tuning_layout.addWidget(self.max_trials_input)
+        input_layout.addWidget(self.patchtst_tuning_group)
+
+        # Tampilkan opsi tuning PatchTST hanya jika model patchtst dipilih
+        self.model_combo.currentTextChanged.connect(self.toggle_patchtst_tuning)
         
         # Parameters
         param_layout = QVBoxLayout()
@@ -147,6 +198,16 @@ class PredictionTab(QWidget):
         param_layout.addWidget(forecast_label)
         param_layout.addWidget(self.forecast_spin)
         params_layout.addLayout(param_layout)
+        
+        # Tambahkan opsi tuning method
+        self.tuning_method_combo = QComboBox()
+        self.tuning_method_combo.addItems(['hyperband', 'bayesian'])
+        params_layout.addWidget(QLabel("Tuning Method:"))
+        params_layout.addWidget(self.tuning_method_combo)
+        # Tambahkan input log_dir tensorboard
+        self.log_dir_input = QLineEdit()
+        self.log_dir_input.setPlaceholderText("TensorBoard log dir (opsional)")
+        params_layout.addWidget(self.log_dir_input)
         
         # Hyperparameter tuning
         tune_layout = QVBoxLayout()
@@ -246,6 +307,21 @@ class PredictionTab(QWidget):
         self.setTabOrder(self.lookback_spin, self.forecast_spin)
         self.setTabOrder(self.forecast_spin, self.tune_checkbox)
         self.setTabOrder(self.tune_checkbox, self.run_button)
+        
+        # Bungkus input_widget dengan QScrollArea
+        input_scroll = QScrollArea()
+        input_scroll.setWidgetResizable(True)
+        input_scroll.setWidget(input_widget)
+        splitter.addWidget(input_scroll)
+        
+        # Bungkus results_widget dengan QScrollArea
+        results_scroll = QScrollArea()
+        results_scroll.setWidgetResizable(True)
+        results_scroll.setWidget(results_widget)
+        splitter.addWidget(results_scroll)
+    
+    def toggle_patchtst_tuning(self, text):
+        self.patchtst_tuning_group.setVisible(text == 'patchtst')
     
     def run_prediction(self):
         # Disable run button during prediction
@@ -260,12 +336,30 @@ class PredictionTab(QWidget):
         lookback = self.lookback_spin.value()
         forecast_days = self.forecast_spin.value()
         tune = self.tune_checkbox.isChecked()
-        
-        # Create predictor
+        tuning_method = self.tuning_method_combo.currentText()
+        log_dir = self.log_dir_input.text() or None
+        # Ambil grid search PatchTST jika dipilih
+        patchtst_params = None
+        if model_type == 'patchtst' and tune:
+            patchtst_params = {
+                'patch_len': [int(x) for x in self.patch_len_input.text().split(',') if x.strip()],
+                'stride': [int(x) for x in self.stride_input.text().split(',') if x.strip()],
+                'd_model': [int(x) for x in self.d_model_input.text().split(',') if x.strip()],
+                'n_heads': [int(x) for x in self.n_heads_input.text().split(',') if x.strip()],
+                'n_layers': [int(x) for x in self.n_layers_input.text().split(',') if x.strip()],
+                'dropout': [float(x) for x in self.dropout_input.text().split(',') if x.strip()],
+                'lr': [float(x) for x in self.lr_input.text().split(',') if x.strip()],
+                'max_trials': self.max_trials_input.value()
+            }
+        # Buat predictor
         self.predictor = StockPredictor(
             ticker, start_date, end_date,
-            lookback, forecast_days, model_type, tune
+            lookback, forecast_days, model_type, tune,
+            tuning_method=tuning_method, log_dir=log_dir
         )
+        # Jika patchtst dan tuning, inject param grid
+        if patchtst_params:
+            self.predictor.patchtst_param_grid = patchtst_params
         
         # Create and start worker thread
         self.worker = WorkerThread(self.predictor)

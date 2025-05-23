@@ -18,9 +18,10 @@ from datetime import timedelta
 from ..data.preprocessor import DataPreprocessor
 from .builder import ModelBuilder
 from .tuner import HyperparameterTuner
+from .patchtst_model import PatchTSTWrapper, patchtst_hyperparameter_search
 
 class StockPredictor:
-    def __init__(self, ticker, start_date, end_date, lookback=60, forecast_days=30, model_type='ensemble', tune_hyperparameters=False):
+    def __init__(self, ticker, start_date, end_date, lookback=60, forecast_days=30, model_type='ensemble', tune_hyperparameters=False, tuning_method='hyperband', log_dir=None):
         self.ticker = ticker
         self.start_date = start_date
         self.end_date = end_date
@@ -28,9 +29,12 @@ class StockPredictor:
         self.forecast_days = forecast_days
         self.model_type = model_type
         self.tune_hyperparameters = tune_hyperparameters
+        self.tuning_method = tuning_method
+        self.log_dir = log_dir
         self.preprocessor = DataPreprocessor(ticker, start_date, end_date)
         self.scaler = MinMaxScaler()
         self.model = None
+        self.patchtst_param_grid = None  # Untuk grid search custom PatchTST
         
     def prepare_data(self):
         """Mempersiapkan data untuk training"""
@@ -61,9 +65,32 @@ class StockPredictor:
             self.X, self.y, test_size=0.2, shuffle=False
         )
         
+        if self.model_type == 'patchtst':
+            if self.tune_hyperparameters:
+                param_grid = self.patchtst_param_grid if self.patchtst_param_grid else {
+                    'patch_len': [8, 16],
+                    'stride': [4, 8],
+                    'd_model': [64, 128],
+                    'n_heads': [2, 4],
+                    'n_layers': [1, 2],
+                    'dropout': [0.1, 0.2],
+                    'lr': [1e-3, 5e-4],
+                    'tuning_method': self.tuning_method
+                }
+                max_trials = param_grid.pop('max_trials', 8) if 'max_trials' in param_grid else 8
+                self.model, self.best_params, self.best_score = patchtst_hyperparameter_search(
+                    X_train, y_train, X_val, y_val, param_grid, max_trials=max_trials, log_dir=self.log_dir
+                )
+            else:
+                self.model = PatchTSTWrapper(
+                    input_dim=input_shape[1],
+                    patch_len=16, stride=8, d_model=128, n_heads=4, n_layers=2, dropout=0.1, lr=1e-3
+                )
+                self.model.fit(X_train, y_train, X_val, y_val, epochs=50, batch_size=32, verbose=1)
+            return None
+        
         if self.tune_hyperparameters and self.model_type != 'ensemble':
-            # Lakukan hyperparameter tuning
-            tuner = HyperparameterTuner(input_shape)
+            tuner = HyperparameterTuner(input_shape, tuning_method=self.tuning_method)
             self.model = tuner.tune_model(
                 self.model_type,
                 X_train, y_train,
@@ -100,6 +127,27 @@ class StockPredictor:
         
     def predict(self):
         """Melakukan prediksi"""
+        if self.model_type == 'patchtst':
+            y_pred = self.model.predict(self.X)
+            y_pred_original = self.scaler.inverse_transform(
+                np.concatenate([y_pred.reshape(-1, 1), np.zeros((len(y_pred), self.X.shape[2]-1))], axis=1)
+            )[:, 0]
+            y_original = self.scaler.inverse_transform(
+                np.concatenate([self.y.reshape(-1, 1), np.zeros((len(self.y), self.X.shape[2]-1))], axis=1)
+            )[:, 0]
+            last_sequence = self.X[-1]
+            forecast = []
+            for _ in range(self.forecast_days):
+                pred = self.model.predict(last_sequence.reshape(1, *last_sequence.shape))
+                forecast.append(pred[0])
+                last_sequence = np.roll(last_sequence, -1, axis=0)
+                last_sequence[-1] = pred
+            forecast = np.array(forecast)
+            forecast_original = self.scaler.inverse_transform(
+                np.concatenate([forecast.reshape(-1, 1), np.zeros((len(forecast), self.X.shape[2]-1))], axis=1)
+            )[:, 0]
+            return y_original, y_pred_original, forecast_original
+        
         # Prediksi pada data test
         y_pred = self.model.predict(self.X)
         

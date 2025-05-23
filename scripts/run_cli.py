@@ -187,7 +187,7 @@ def main():
     parser.add_argument('--lookback', type=int, default=60, help='Number of days to look back')
     parser.add_argument('--forecast_days', type=int, default=30, help='Number of days to forecast')
     parser.add_argument('--model', type=str, default='ensemble', 
-                        choices=['cnn_lstm', 'bilstm', 'transformer', 'ensemble'], 
+                        choices=['cnn_lstm', 'bilstm', 'transformer', 'ensemble', 'patchtst'], 
                         help='Model type')
     parser.add_argument('--tune', action='store_true', help='Enable hyperparameter tuning')
     parser.add_argument('--save', action='store_true', help='Save results to files')

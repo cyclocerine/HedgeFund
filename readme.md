@@ -48,6 +48,12 @@ Sistem ini merupakan evolusi dari model prediksi harga saham sederhana, yang kin
 - **Visualisasi Hasil**: Grafik perbandingan dan analisis visual
 - **What-If Analysis**: Pengujian berbagai parameter dan skenario pasar
 
+### 6. Model PatchTST (PyTorch)
+- **PatchTST**: Model transformer berbasis patch untuk time series forecasting, sangat efektif untuk data finansial dan prediksi harga saham.
+- **Keunggulan**: Lebih efisien dan akurat pada data time series panjang, mendukung hyperparameter tuning grid search secara fleksibel di GUI.
+- **Tuning**: Untuk tuning grid search custom (patch_len, stride, d_model, n_heads, n_layers, dropout, lr, max_trials), gunakan GUI. CLI hanya mendukung grid default.
+- **Dokumentasi kode**: [src/models/patchtst_model.py](src/models/patchtst_model.py)
+
 ## 💻 Penggunaan Mendetail
 
 ### Instalasi
@@ -89,9 +95,17 @@ Untuk penggunaan otomatis atau scripting:
 ```bash
 python scripts/run_cli.py --ticker AAPL --days 30 --strategy "Trend Following" --allow-short True
 
-#Untuk Memprediksi gunakan perintah
+# Untuk Memprediksi gunakan perintah
 python scripts/run_cli.py --ticker ADRO.JK --model transformer --lookback 30 --forecast_days 10 --save
+
+# Untuk prediksi dengan PatchTST (PyTorch)
+python scripts/run_cli.py --ticker BMRI.JK --model patchtst --lookback 60 --forecast_days 20 --tune --save
 ```
+
+> **Catatan:**
+> - Untuk tuning grid search custom PatchTST (misal: patch_len, stride, d_model, dsb), gunakan GUI. CLI hanya mendukung grid default.
+> - Lihat dokumentasi kode PatchTST di [src/models/patchtst_model.py](src/models/patchtst_model.py)
+
 ### Parameter CLI
 
 ---
@@ -101,7 +115,7 @@ python scripts/run_cli.py --ticker ADRO.JK --model transformer --lookback 30 --f
 | `--ticker`     | Simbol saham/komoditas                 | `AAPL`, `ADRO.JK`  |
 | `--start_date` | Tanggal awal data historis (YYYY-MM-DD)| `2020-01-01`       |
 | `--end_date`   | Tanggal akhir data historis            | `2024-12-31`       |
-| `--model`      | Jenis model yang digunakan             | `cnn_lstm`, `bilstm`, `transformer`, `ensemble` |
+| `--model`      | Jenis model yang digunakan             | `cnn_lstm`, `bilstm`, `transformer`, `ensemble`, `patchtst` |
 | `--lookback`   | Jumlah hari historis untuk input model | `60`               |
 | `--forecast`   | Jumlah hari ke depan untuk prediksi    | `20`               |
 | `--tune`       | Aktifkan hyperparameter tuning         | `True` / `False`   |

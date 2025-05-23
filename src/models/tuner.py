@@ -13,10 +13,12 @@ from tensorflow.keras.layers import Input, Bidirectional, Concatenate, GlobalAve
 from tensorflow.keras.layers import LayerNormalization, Add
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+import optuna
 
 class HyperparameterTuner:
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, tuning_method='hyperband'):
         self.input_shape = input_shape
+        self.tuning_method = tuning_method
         
     def build_cnn_lstm_model(self, hp):
         """Membangun model CNN-LSTM dengan hyperparameter yang dapat di-tuning"""
@@ -161,59 +163,99 @@ class HyperparameterTuner:
         return model
         
     def tune_model(self, model_type, X_train, y_train, X_val, y_val, max_trials=10, executions_per_trial=1):
-        """Melakukan hyperparameter tuning untuk model yang dipilih"""
-        if model_type == 'cnn_lstm':
-            tuner = kt.Hyperband(
-                self.build_cnn_lstm_model,
-                objective='val_loss',
-                max_epochs=50,
-                factor=3,
-                directory='tuning',
-                project_name='cnn_lstm_tuning'
-            )
-        elif model_type == 'bilstm':
-            tuner = kt.Hyperband(
-                self.build_bilstm_model,
-                objective='val_loss',
-                max_epochs=50,
-                factor=3,
-                directory='tuning',
-                project_name='bilstm_tuning'
-            )
-        elif model_type == 'transformer':
-            tuner = kt.Hyperband(
-                self.build_transformer_model,
-                objective='val_loss',
-                max_epochs=50,
-                factor=3,
-                directory='tuning',
-                project_name='transformer_tuning'
-            )
+        if self.tuning_method == 'bayesian':
+            def objective(trial):
+                if model_type == 'cnn_lstm':
+                    model = self.build_cnn_lstm_model(trial)
+                elif model_type == 'bilstm':
+                    model = self.build_bilstm_model(trial)
+                elif model_type == 'transformer':
+                    model = self.build_transformer_model(trial)
+                else:
+                    raise ValueError(f"Model type {model_type} not supported for tuning")
+                callbacks = [
+                    EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+                    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.0001)
+                ]
+                history = model.fit(
+                    X_train, y_train,
+                    epochs=50,
+                    batch_size=32,
+                    validation_data=(X_val, y_val),
+                    callbacks=callbacks,
+                    verbose=0
+                )
+                val_loss = min(history.history['val_loss'])
+                return val_loss
+            study = optuna.create_study(direction='minimize')
+            study.optimize(objective, n_trials=max_trials)
+            best_trial = study.best_trial
+            print("\nBest hyperparameters found:")
+            for param, value in best_trial.params.items():
+                print(f"{param}: {value}")
+            # Build model with best params
+            if model_type == 'cnn_lstm':
+                model = self.build_cnn_lstm_model(optuna.trial.FixedTrial(best_trial.params))
+            elif model_type == 'bilstm':
+                model = self.build_bilstm_model(optuna.trial.FixedTrial(best_trial.params))
+            elif model_type == 'transformer':
+                model = self.build_transformer_model(optuna.trial.FixedTrial(best_trial.params))
+            else:
+                raise ValueError(f"Model type {model_type} not supported for tuning")
+            return model
         else:
-            raise ValueError(f"Model type {model_type} not supported for tuning")
+            if model_type == 'cnn_lstm':
+                tuner = kt.Hyperband(
+                    self.build_cnn_lstm_model,
+                    objective='val_loss',
+                    max_epochs=50,
+                    factor=3,
+                    directory='tuning',
+                    project_name='cnn_lstm_tuning'
+                )
+            elif model_type == 'bilstm':
+                tuner = kt.Hyperband(
+                    self.build_bilstm_model,
+                    objective='val_loss',
+                    max_epochs=50,
+                    factor=3,
+                    directory='tuning',
+                    project_name='bilstm_tuning'
+                )
+            elif model_type == 'transformer':
+                tuner = kt.Hyperband(
+                    self.build_transformer_model,
+                    objective='val_loss',
+                    max_epochs=50,
+                    factor=3,
+                    directory='tuning',
+                    project_name='transformer_tuning'
+                )
+            else:
+                raise ValueError(f"Model type {model_type} not supported for tuning")
             
-        # Callbacks
-        callbacks = [
-            EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
-            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.0001)
-        ]
-        
-        # Mulai pencarian hyperparameter
-        print(f"\nStarting hyperparameter tuning for {model_type} model...")
-        tuner.search(
-            X_train, y_train,
-            epochs=50,
-            validation_data=(X_val, y_val),
-            callbacks=callbacks,
-            verbose=1
-        )
-        
-        # Dapatkan model terbaik
-        best_model = tuner.get_best_models(num_models=1)[0]
-        best_hyperparameters = tuner.get_best_hyperparameters(num_trials=1)[0]
-        
-        print("\nBest hyperparameters found:")
-        for param, value in best_hyperparameters.values.items():
-            print(f"{param}: {value}")
+            # Callbacks
+            callbacks = [
+                EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+                ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=0.0001)
+            ]
             
-        return best_model 
+            # Mulai pencarian hyperparameter
+            print(f"\nStarting hyperparameter tuning for {model_type} model...")
+            tuner.search(
+                X_train, y_train,
+                epochs=50,
+                validation_data=(X_val, y_val),
+                callbacks=callbacks,
+                verbose=1
+            )
+            
+            # Dapatkan model terbaik
+            best_model = tuner.get_best_models(num_models=1)[0]
+            best_hyperparameters = tuner.get_best_hyperparameters(num_trials=1)[0]
+            
+            print("\nBest hyperparameters found:")
+            for param, value in best_hyperparameters.values.items():
+                print(f"{param}: {value}")
+            
+            return best_model 
