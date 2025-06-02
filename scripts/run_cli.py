@@ -7,12 +7,21 @@ Script untuk menjalankan aplikasi prediksi saham dengan antarmuka command line.
 """
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 import os
 import time
 import matplotlib.pyplot as plt
 import numpy as np
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.panel import Panel
+from rich.text import Text
+from rich.live import Live
+from rich.layout import Layout
+from rich.syntax import Syntax
+from rich import box
 
 # Tambahkan direktori root ke sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -21,300 +30,533 @@ from src.models.predictor import StockPredictor
 from src.trading.backtest import Backtester
 from src.trading.optimizer import StrategyOptimizer
 
+# Inisialisasi console untuk tampilan yang lebih menarik
+console = Console()
+
 def print_header():
-    print("=" * 60)
-    print("  🚀 APLIKASI PREDIKSI HARGA SAHAM - MODE CLI")
-    print("  Powered by Deep Learning Models")
-    print("=" * 60)
-    print()
+    title = Text("🚀 APLIKASI PREDIKSI HARGA SAHAM", style="bold cyan")
+    subtitle = Text("cyclocerine", style="italic blue")
+    
+    header_panel = Panel(
+        Text.assemble(title, "\n", subtitle),
+        box=box.DOUBLE,
+        border_style="bright_blue",
+        padding=(1, 2)
+    )
+    console.print(header_panel)
+    console.print()
 
 def print_step(step_number, total_steps, step_name):
-    print(f"[{step_number}/{total_steps}] 🔄 {step_name}...")
+    step_text = Text()
+    step_text.append(f"[{step_number}/{total_steps}] ", style="bright_blue")
+    step_text.append("🔄 ", style="bright_yellow")
+    step_text.append(step_name, style="bright_white")
+    console.print(step_text)
 
 def print_success(message):
-    print(f"✅ {message}")
+    console.print(f"✅ {message}", style="bright_green")
 
 def print_error(message):
-    print(f"❌ ERROR: {message}")
+    console.print(f"❌ ERROR: {message}", style="bold red")
 
 def print_warning(message):
-    print(f"⚠️ PERINGATAN: {message}")
+    console.print(f"⚠️ {message}", style="bright_yellow")
 
 def print_info(message):
-    print(f"ℹ️ {message}")
+    console.print(f"ℹ️ {message}", style="bright_blue")
 
 def print_model_metrics(metrics):
-    print("\n📊 Metrik Evaluasi Model:")
-    print("-" * 40)
-    print(f"MSE: {metrics['mse']:.4f}")
-    print(f"RMSE: {metrics['rmse']:.4f}")
-    print(f"MAE: {metrics['mae']:.4f}")
-    print(f"R2 Score: {metrics['r2']:.4f}")
-    print("-" * 40)
+    """Menampilkan metrik evaluasi model"""
+    table = Table.grid(padding=1)
+    table.add_column(style="bright_blue")
+    table.add_column(style="bright_white")
+    
+    table.add_row("MSE", f"{metrics['MSE']:.4f}")
+    table.add_row("RMSE", f"{metrics['RMSE']:.4f}")
+    table.add_row("MAE", f"{metrics['MAE']:.4f}")
+    table.add_row("R2 Score", f"{metrics['R2']:.4f}")
+    
+    panel = Panel(
+        table,
+        title="📊 Metrik Model",
+        border_style="bright_blue",
+        box=box.ROUNDED
+    )
+    console.print(panel)
+    console.print()
 
 def print_forecast(forecast):
-    print("\n🔮 Prediksi untuk hari-hari berikutnya:")
-    print("-" * 40)
+    table = Table(title="🔮 Prediksi untuk Hari-hari Berikutnya", box=box.ROUNDED, border_style="bright_blue")
+    
+    table.add_column("Hari", style="cyan", justify="center")
+    table.add_column("Harga", style="green", justify="right")
+    table.add_column("Tren", style="magenta", justify="center")
+    
     for i, price in enumerate(forecast, 1):
-        # Tambahkan indikator tren jika ada nilai sebelumnya
         trend = ""
+        trend_style = "green"
         if i > 1:
             prev_price = forecast[i-2]
             pct_change = (price - prev_price) / prev_price * 100
             if pct_change > 0:
-                trend = f"(↗️ +{pct_change:.2f}%)"
+                trend = f"↗️ +{pct_change:.2f}%"
+                trend_style = "bright_green"
             else:
-                trend = f"(↘️ {pct_change:.2f}%)"
+                trend = f"↘️ {pct_change:.2f}%"
+                trend_style = "bright_red"
         
-        print(f"Hari {i}: Rp {price:.2f} {trend}")
-    print("-" * 40)
+        table.add_row(
+            str(i),
+            f"Rp {price:,.2f}",
+            Text(trend, style=trend_style)
+        )
+    
+    console.print(table)
+
+def print_forecast_with_signals(forecast, signals):
+    table = Table(title="🔮 Prediksi dan Sinyal Trading", box=box.ROUNDED, border_style="bright_blue")
+    
+    table.add_column("Hari", style="cyan", justify="center")
+    table.add_column("Harga", style="green", justify="right")
+    table.add_column("Tren", style="magenta", justify="center")
+    table.add_column("Sinyal", style="yellow", justify="center")
+    table.add_column("Confidence", style="bright_blue", justify="right")
+    
+    for i, (price, signal) in enumerate(zip(forecast, signals), 1):
+        trend = ""
+        trend_style = "green"
+        if i > 1:
+            prev_price = forecast[i-2]
+            pct_change = (price - prev_price) / prev_price * 100
+            if pct_change > 0:
+                trend = f"↗️ +{pct_change:.2f}%"
+                trend_style = "bright_green"
+            else:
+                trend = f"↘️ {pct_change:.2f}%"
+                trend_style = "bright_red"
+        
+        # Format sinyal trading
+        signal_text = "🟢 BELI" if signal['action'] == 'buy' else "🔴 JUAL" if signal['action'] == 'sell' else "⚪ TAHAN"
+        signal_style = "bright_green" if signal['action'] == 'buy' else "bright_red" if signal['action'] == 'sell' else "bright_white"
+        
+        table.add_row(
+            str(i),
+            f"Rp {price:,.2f}",
+            Text(trend, style=trend_style),
+            Text(signal_text, style=signal_style),
+            f"{signal['confidence']:.1f}%"
+        )
+    
+    console.print(table)
+
+def print_trading_summary(signals):
+    # Hitung statistik sinyal
+    total_signals = len(signals)
+    buy_signals = sum(1 for s in signals if s['action'] == 'buy')
+    sell_signals = sum(1 for s in signals if s['action'] == 'sell')
+    hold_signals = sum(1 for s in signals if s['action'] == 'hold')
+    
+    avg_confidence = sum(s['confidence'] for s in signals) / total_signals
+    
+    # Buat tabel ringkasan
+    summary_table = Table.grid(padding=1)
+    summary_table.add_column(style="bright_blue")
+    summary_table.add_column(style="bright_white")
+    
+    summary_table.add_row("Total Hari", str(total_signals))
+    summary_table.add_row("Sinyal Beli", f"{buy_signals} ({buy_signals/total_signals*100:.1f}%)")
+    summary_table.add_row("Sinyal Jual", f"{sell_signals} ({sell_signals/total_signals*100:.1f}%)")
+    summary_table.add_row("Sinyal Tahan", f"{hold_signals} ({hold_signals/total_signals*100:.1f}%)")
+    summary_table.add_row("Rata-rata Confidence", f"{avg_confidence:.1f}%")
+    
+    summary_panel = Panel(
+        summary_table,
+        title="📊 Ringkasan Sinyal Trading",
+        border_style="bright_blue",
+        box=box.ROUNDED
+    )
+    console.print(summary_panel)
 
 def print_backtest_results(results):
-    """
-    Mencetak hasil backtest ke console
-    
-    Parameters:
-    -----------
-    results : tuple
-        (portfolio_values, trades, performance)
-    """
     portfolio_values, trades, performance = results
     
-    print("\n📈 Hasil Backtesting:")
-    print("-" * 40)
-    print(f"Investasi Awal: Rp {performance['initial_investment']:.2f}")
-    print(f"Nilai Akhir: Rp {performance['final_value']:.2f}")
-    print(f"Return Total: {performance['total_return']:.2f}%")
-    print(f"Maximum Drawdown: {performance['max_drawdown']:.2f}%")
-    print(f"Sharpe Ratio: {performance['sharpe_ratio']:.4f}")
-    print(f"Win Rate: {performance['win_rate']:.2f}%")
-    print(f"Jumlah Transaksi: {performance['num_trades']}")
-    print("-" * 40)
+    # Panel untuk ringkasan kinerja
+    summary_table = Table(box=None)
+    summary_table.add_column("Metrik", style="cyan")
+    summary_table.add_column("Nilai", justify="right", style="green")
     
-    print("\n💹 Transaksi:")
-    print("-" * 60)
-    for i, trade in enumerate(trades[:10]):  # Hanya tampilkan 10 transaksi pertama
-        print(f"{i+1}. Hari {trade['day']}: {trade['type']} - {trade['shares']:.2f} saham " + 
-              f"@ Rp {trade['price']:.2f} = Rp {trade['value']:.2f}")
+    summary_table.add_row("Investasi Awal", f"Rp {performance['initial_investment']:,.2f}")
+    summary_table.add_row("Nilai Akhir", f"Rp {performance['final_value']:,.2f}")
+    summary_table.add_row("Return Total", f"{performance['total_return']:.2f}%")
+    summary_table.add_row("Maximum Drawdown", f"{performance['max_drawdown']:.2f}%")
+    summary_table.add_row("Sharpe Ratio", f"{performance['sharpe_ratio']:.4f}")
+    summary_table.add_row("Win Rate", f"{performance['win_rate']:.2f}%")
+    summary_table.add_row("Jumlah Transaksi", str(performance['num_trades']))
+    
+    summary_panel = Panel(
+        summary_table,
+        title="📈 Ringkasan Hasil Backtest",
+        border_style="bright_blue",
+        box=box.ROUNDED
+    )
+    console.print(summary_panel)
+    
+    # Tabel untuk transaksi
+    trade_table = Table(title="💹 Riwayat Transaksi", box=box.ROUNDED, border_style="bright_blue")
+    trade_table.add_column("No", style="cyan", justify="center")
+    trade_table.add_column("Hari", style="bright_blue")
+    trade_table.add_column("Tipe", style="green")
+    trade_table.add_column("Jumlah", justify="right", style="yellow")
+    trade_table.add_column("Harga", justify="right", style="magenta")
+    trade_table.add_column("Nilai", justify="right", style="bright_green")
+    
+    for i, trade in enumerate(trades[:10], 1):
+        trade_table.add_row(
+            str(i),
+            str(trade['day']),
+            trade['type'],
+            f"{trade['shares']:.2f}",
+            f"Rp {trade['price']:,.2f}",
+            f"Rp {trade['value']:,.2f}"
+        )
     
     if len(trades) > 10:
-        print(f"... dan {len(trades) - 10} transaksi lainnya")
-    print("-" * 60)
+        trade_table.add_row("...", "...", "...", "...", "...", "...")
+        trade_table.caption = f"Menampilkan 10 dari {len(trades)} transaksi"
+    
+    console.print(trade_table)
 
 def save_results(predictor, y_true, y_pred, forecast, args):
-    try:
-        # Buat direktori results jika belum ada
-        if not os.path.exists("results"):
-            os.makedirs("results")
-        
-        # Generate nama file berdasarkan ticker dan tanggal
-        today = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"results/{args.ticker}_{today}"
-        
-        # Simpan plot
-        plt.figure(figsize=(12, 6))
-        plt.plot(y_true, label='Aktual', color='blue')
-        plt.plot(y_pred, label='Prediksi', color='red', linestyle='--')
-        plt.plot(range(len(y_true), len(y_true) + len(forecast)), 
-                forecast, label='Forecast', color='green', linestyle='-.')
-        plt.title(f'{args.ticker} - Prediksi Harga Saham dengan {args.model.upper()}')
-        plt.xlabel('Hari')
-        plt.ylabel('Harga')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(f"{filename}_plot.png", dpi=300, bbox_inches='tight')
-        
-        # Simpan hasil dalam CSV
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
         try:
-            predictor.save_results_to_csv(f"{filename}_results.csv")
-            print_success(f"Hasil disimpan ke {filename}_results.csv")
+            # Buat direktori results jika belum ada
+            if not os.path.exists("results"):
+                task = progress.add_task("Membuat direktori results...", total=1)
+                os.makedirs("results")
+                progress.update(task, advance=1)
+            
+            # Generate nama file berdasarkan ticker dan tanggal
+            today = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"results/{args.ticker}_{today}"
+            
+            # Simpan plot
+            task_plot = progress.add_task("Menyimpan plot...", total=1)
+            plt.figure(figsize=(12, 6))
+            plt.plot(y_true, label='Aktual', color='blue')
+            plt.plot(y_pred, label='Prediksi', color='red', linestyle='--')
+            plt.plot(range(len(y_true), len(y_true) + len(forecast)), 
+                    forecast, label='Forecast', color='green', linestyle='-.')
+            plt.title(f'{args.ticker} - Prediksi Harga Saham dengan {args.model.upper()}')
+            plt.xlabel('Hari')
+            plt.ylabel('Harga')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(f"{filename}_plot.png", dpi=300, bbox_inches='tight')
+            progress.update(task_plot, advance=1)
+            
+            # Simpan hasil dalam CSV
+            task_csv = progress.add_task("Menyimpan hasil ke CSV...", total=1)
+            try:
+                predictor.save_results_to_csv(f"{filename}_results.csv")
+                progress.update(task_csv, advance=1)
+                print_success(f"Hasil disimpan ke {filename}_results.csv")
+            except Exception as e:
+                print_warning(f"Gagal menyimpan hasil ke CSV: {str(e)}")
+            
+            print_success(f"Plot disimpan ke {filename}_plot.png")
         except Exception as e:
-            print_warning(f"Gagal menyimpan hasil ke CSV: {str(e)}")
-        
-        print_success(f"Plot disimpan ke {filename}_plot.png")
-    except Exception as e:
-        print_warning(f"Gagal menyimpan hasil: {str(e)}")
+            print_warning(f"Gagal menyimpan hasil: {str(e)}")
 
 def save_backtest_results(predictor, backtest_results, args):
-    """
-    Simpan hasil backtest ke file
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console
+    ) as progress:
+        try:
+            # Buat direktori results jika belum ada
+            if not os.path.exists("results"):
+                task = progress.add_task("Membuat direktori results...", total=1)
+                os.makedirs("results")
+                progress.update(task, advance=1)
+            
+            # Generate nama file
+            today = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"results/{args.ticker}_{args.strategy}_{today}_backtest"
+            
+            portfolio_values, trades, performance = backtest_results
+            
+            # Simpan plot
+            task_plot = progress.add_task("Menyimpan plot backtest...", total=1)
+            plt.figure(figsize=(12, 6))
+            plt.plot(portfolio_values, label='Nilai Portfolio', color='blue')
+            plt.title(f'{args.ticker} - Backtest dengan {args.strategy}')
+            plt.xlabel('Hari')
+            plt.ylabel('Nilai Portfolio')
+            plt.grid(True)
+            plt.savefig(f"{filename}_plot.png", dpi=300, bbox_inches='tight')
+            progress.update(task_plot, advance=1)
+            
+            # Simpan hasil backtest
+            task_csv = progress.add_task("Menyimpan hasil backtest ke CSV...", total=1)
+            predictor.save_backtest_results(f"{filename}_results.csv", 
+                                         portfolio_values, trades, performance)
+            progress.update(task_csv, advance=1)
+            
+            print_success(f"Hasil backtest disimpan ke {filename}_results.csv")
+            print_success(f"Plot backtest disimpan ke {filename}_plot.png")
+        except Exception as e:
+            print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Aplikasi prediksi harga saham dengan PPO trading signals")
     
-    Parameters:
-    -----------
-    predictor : StockPredictor
-        Objek prediktor yang digunakan
-    backtest_results : tuple
-        (portfolio_values, trades, performance)
-    args : argparse.Namespace
-        Argumen command line
-    """
-    try:
-        # Buat direktori results jika belum ada
-        if not os.path.exists("results"):
-            os.makedirs("results")
-        
-        # Generate nama file berdasarkan ticker dan tanggal
-        today = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"results/{args.ticker}_{args.strategy}_{today}_backtest"
-        
-        portfolio_values, trades, performance = backtest_results
-        
-        # Simpan plot
-        plt.figure(figsize=(12, 6))
-        plt.plot(portfolio_values, label='Nilai Portfolio', color='blue')
-        plt.title(f'{args.ticker} - Backtest dengan {args.strategy}')
-        plt.xlabel('Hari')
-        plt.ylabel('Nilai Portfolio')
-        plt.grid(True)
-        plt.savefig(f"{filename}_plot.png", dpi=300, bbox_inches='tight')
-        
-        # Simpan hasil backtest
-        predictor.save_backtest_results(f"{filename}_results.csv", 
-                                        portfolio_values, trades, performance)
-        
-        print_success(f"Hasil backtest disimpan ke {filename}_results.csv")
-        print_success(f"Plot backtest disimpan ke {filename}_plot.png")
-    except Exception as e:
-        print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
+    # Parameter wajib
+    parser.add_argument("--ticker", required=True, help="Kode saham (contoh: BMRI.JK)")
+    parser.add_argument("--mode", required=True, choices=["predict", "backtest"], help="Mode operasi: predict atau backtest")
+    
+    # Parameter opsional
+    parser.add_argument("--model", default="patchtst", choices=["patchtst"], help="Model prediksi yang digunakan")
+    parser.add_argument("--start-date", help="Tanggal awal data (YYYY-MM-DD)")
+    parser.add_argument("--end-date", help="Tanggal akhir data (YYYY-MM-DD)")
+    parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
+    parser.add_argument("--tuning-method", default="grid", choices=["grid", "hyperband"], help="Metode tuning hyperparameter")
+    parser.add_argument("--log-dir", help="Direktori untuk menyimpan log")
+    parser.add_argument("--ppo", action="store_true", help="Aktifkan PPO trading signals")
+    parser.add_argument("--save-results", action="store_true", help="Simpan hasil prediksi")
+    
+    # Parameter lookback dan forecast
+    parser.add_argument("--lookback", type=int, default=60, help="Jumlah hari historis yang digunakan untuk prediksi")
+    parser.add_argument("--forecast-days", type=int, default=30, help="Jumlah hari yang akan diprediksi ke depan")
+    
+    # Parameter khusus backtest
+    parser.add_argument("--strategy", default="PPO", choices=["Trend Following", "Mean Reversion", "Predictive", "PPO"], help="Strategi trading")
+    parser.add_argument("--optimize", action="store_true", help="Aktifkan optimasi parameter strategi")
+    parser.add_argument("--initial-balance", type=float, default=100000000, help="Modal awal untuk backtest")
+    
+    args = parser.parse_args()
+    
+    # Validasi parameter lookback dan forecast_days
+    if args.lookback < 1:
+        print_error("lookback harus lebih besar dari 0")
+        sys.exit(1)
+    
+    if args.forecast_days < 1:
+        print_error("forecast_days harus lebih besar dari 0")
+        sys.exit(1)
+    
+    # Set tanggal default jika tidak diisi
+    if not args.start_date:
+        args.start_date = (datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d")
+    if not args.end_date:
+        args.end_date = datetime.now().strftime("%Y-%m-%d")
+    
+    return args
 
 def main():
     print_header()
     
-    parser = argparse.ArgumentParser(description='Stock Price Prediction')
-    parser.add_argument('--ticker', type=str, default='ADRO.JK', help='Stock ticker symbol')
-    parser.add_argument('--start_date', type=str, default='2020-01-01', help='Start date (YYYY-MM-DD)')
-    parser.add_argument('--end_date', type=str, default=datetime.now().strftime('%Y-%m-%d'), help='End date (YYYY-MM-DD)')
-    parser.add_argument('--lookback', type=int, default=60, help='Number of days to look back')
-    parser.add_argument('--forecast_days', type=int, default=30, help='Number of days to forecast')
-    parser.add_argument('--model', type=str, default='ensemble', 
-                        choices=['cnn_lstm', 'bilstm', 'transformer', 'ensemble', 'patchtst'], 
-                        help='Model type')
-    parser.add_argument('--tune', action='store_true', help='Enable hyperparameter tuning')
-    parser.add_argument('--save', action='store_true', help='Save results to files')
+    # Buat layout untuk status
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header"),
+        Layout(name="body"),
+        Layout(name="footer")
+    )
     
-    # Tambahkan argumen untuk backtest dan strategi
-    parser.add_argument('--backtest', action='store_true', help='Run backtest on historical data')
-    parser.add_argument('--strategy', type=str, default='Predictive', 
-                       choices=['Trend Following', 'Mean Reversion', 'Predictive', 'PPO'],
-                       help='Trading strategy to use')
-    parser.add_argument('--optimize', action='store_true', help='Optimize strategy parameters')
+    args = parse_args()
     
-    args = parser.parse_args()
+    # Panel untuk informasi konfigurasi
+    config_table = Table.grid(padding=1)
+    config_table.add_column(style="bright_blue")
+    config_table.add_column(style="bright_white")
     
-    print_info(f"Ticker: {args.ticker}")
-    print_info(f"Periode: {args.start_date} hingga {args.end_date}")
-    print_info(f"Model: {args.model.upper()}")
-    print_info(f"Lookback: {args.lookback} hari, Forecast: {args.forecast_days} hari")
-    print_info(f"Hyperparameter Tuning: {'Aktif' if args.tune else 'Tidak Aktif'}")
-    if args.backtest:
-        print_info(f"Backtest: Aktif, Strategi: {args.strategy}")
-        print_info(f"Optimisasi Parameter: {'Aktif' if args.optimize else 'Tidak Aktif'}")
-    print()
+    config_table.add_row("Ticker", args.ticker)
+    config_table.add_row("Mode", args.mode.upper())
+    config_table.add_row("Periode", f"{args.start_date} hingga {args.end_date}")
+    config_table.add_row("Model", args.model.upper())
+    if args.mode == 'backtest':
+        config_table.add_row("Strategy", args.strategy)
+        config_table.add_row("Initial Balance", f"Rp {args.initial_balance:,.2f}")
+    config_table.add_row("PPO Trading Signals", "Aktif" if args.ppo else "Tidak Aktif")
+    
+    config_panel = Panel(
+        config_table,
+        title="⚙️ Konfigurasi",
+        border_style="bright_blue",
+        box=box.ROUNDED
+    )
+    console.print(config_panel)
+    console.print()
     
     try:
-        # Step 1: Initialize predictor
-        print_step(1, 5 if not args.backtest else 7, "Memulai prediktor dan mengunduh data")
-        predictor = StockPredictor(
-            args.ticker,
-            args.start_date,
-            args.end_date,
-            args.lookback,
-            args.forecast_days,
-            args.model,
-            args.tune
-        )
-        
-        # Step 2: Prepare data
-        print_step(2, 5 if not args.backtest else 7, "Mempersiapkan data")
-        if not predictor.prepare_data():
-            print_error("Gagal mempersiapkan data")
-            return
-        print_success("Data berhasil dipersiapkan")
-        
-        # Step 3: Train model
-        print_step(3, 5 if not args.backtest else 7, f"Melatih model {args.model.upper()}")
-        start_time = time.time()
-        history = predictor.train_model()
-        training_time = time.time() - start_time
-        print_success(f"Model berhasil dilatih dalam {training_time:.2f} detik")
-        
-        # Step 4: Make predictions
-        print_step(4, 5 if not args.backtest else 7, "Membuat prediksi")
-        y_true, y_pred, forecast = predictor.predict()
-        print_success("Prediksi berhasil dibuat")
-        
-        # Step 5: Evaluate model
-        print_step(5, 5 if not args.backtest else 7, "Mengevaluasi model")
-        metrics = predictor.evaluate(y_true, y_pred)
-        print_success("Evaluasi selesai")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            # Step 1: Initialize predictor
+            predictor_task = progress.add_task("🚀 Memulai prediktor...", total=100)
+            
+            def update_progress(value, message):
+                progress.update(predictor_task, completed=value, description=f"🚀 {message}")
+            
+            predictor = StockPredictor(
+                ticker=args.ticker,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                model_type=args.model,
+                lookback=args.lookback,
+                forecast_days=args.forecast_days,
+                tune_hyperparameters=args.tune,
+                tuning_method=args.tuning_method,
+                log_dir=args.log_dir,
+                progress_callback=update_progress
+            )
+            
+            # Step 2: Prepare data
+            if not predictor.prepare_data():
+                print_error("Gagal mempersiapkan data")
+                return
+            
+            # Step 3: Train model
+            predictor.train_model()
+            
+            # Step 4: Make predictions
+            y_true, y_pred, forecast = predictor.predict()
+            
+            # Step 5: Evaluate model
+            metrics = predictor.evaluate(y_true, y_pred)
+            
+            # Step 6: Generate trading signals if PPO is enabled
+            trading_signals = []
+            if args.ppo:
+                ppo_task = progress.add_task("🤖 Menghasilkan sinyal trading dengan PPO...", total=100)
+                
+                # Get states for PPO
+                states = predictor.get_states_for_ppo()
+                progress.update(ppo_task, advance=30)
+                
+                # Initialize PPO agent with correct state dimension
+                from src.trading.ppo_agent import PPOAgent
+                ppo_agent = PPOAgent(
+                    state_dim=5,  # Dimensi state dari get_states_for_ppo
+                    action_dim=3,  # buy, sell, hold
+                    hidden_dim=64
+                )
+                progress.update(ppo_task, advance=20)
+                
+                # Train PPO agent
+                ppo_agent.train(states, n_epochs=50)
+                progress.update(ppo_task, advance=30)
+                
+                # Generate trading signals
+                for i in range(len(forecast)):
+                    state = states[i] if i < len(states) else states[-1]
+                    action, confidence = ppo_agent.get_action(state)
+                    trading_signals.append({
+                        'action': 'buy' if action == 0 else 'sell' if action == 1 else 'hold',
+                        'confidence': confidence * 100
+                    })
+                progress.update(ppo_task, completed=100)
         
         # Print results
         print_model_metrics(metrics)
-        print_forecast(forecast)
         
-        # Jalankan backtest jika diminta
-        if args.backtest:
-            # Step 6: Run backtest
-            print_step(6, 7, f"Menjalankan backtest dengan strategi {args.strategy}")
-            backtester = Backtester(y_true, y_pred)
-            
-            # Optimize strategy parameters if requested
-            if args.optimize:
-                print_info("Mengoptimalkan parameter strategi...")
-                optimizer = StrategyOptimizer(y_true, y_pred)
+        if args.mode == 'predict':
+            if args.ppo:
+                print_forecast_with_signals(forecast, trading_signals)
+                print_trading_summary(trading_signals)
+            else:
+                print_forecast(forecast)
                 
-                # Set parameter ranges berdasarkan strategi
-                if args.strategy == 'Trend Following':
-                    param_ranges = {'threshold': [0.005, 0.01, 0.02, 0.03, 0.05]}
-                elif args.strategy == 'Mean Reversion':
-                    param_ranges = {
-                        'window': [3, 5, 10, 15, 20],
-                        'buy_threshold': [0.97, 0.98, 0.99],
-                        'sell_threshold': [1.01, 1.02, 1.03]
-                    }
-                elif args.strategy == 'Predictive':
-                    param_ranges = {
-                        'buy_threshold': [1.005, 1.01, 1.02],
-                        'sell_threshold': [0.98, 0.99, 0.995]
-                    }
-                elif args.strategy == 'PPO':
-                    param_ranges = {
-                        'actor_lr': [0.0001, 0.0003, 0.001],
-                        'critic_lr': [0.0005, 0.001, 0.002],
-                        'gamma': [0.95, 0.97, 0.99],
-                        'clip_ratio': [0.1, 0.2, 0.3],
-                        'episodes': [5, 10]  # Untuk CLI gunakan episodes yang lebih kecil
-                    }
-                else:
-                    param_ranges = {}
+            # Save prediction results if requested
+            if args.save_results:
+                save_results(predictor, y_true, y_pred, forecast, args)
                 
-                # Optimasi
-                best_params, best_performance, best_portfolio, best_trades = optimizer.optimize(
-                    args.strategy, param_ranges
+        elif args.mode == 'backtest':
+            # Run backtest
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
+                backtest_task = progress.add_task(f"📊 Menjalankan backtest dengan strategi {args.strategy}...", total=100)
+                backtester = Backtester(
+                    ticker=args.ticker,
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    strategy=args.strategy,
+                    initial_balance=args.initial_balance,
+                    lookback=args.lookback,
+                    forecast_days=args.forecast_days
                 )
                 
-                print_info(f"Parameter optimal: {best_params}")
-                backtest_results = (best_portfolio, best_trades, best_performance)
-            else:
-                # Gunakan parameter default
-                backtest_results = backtester.run(args.strategy)
-            
-            print_success("Backtest selesai")
+                # Optimize strategy parameters if requested
+                if args.optimize:
+                    print_info("Mengoptimalkan parameter strategi...")
+                    optimizer = StrategyOptimizer(y_true, y_pred)
+                    
+                    # Set parameter ranges berdasarkan strategi
+                    if args.strategy == 'Trend Following':
+                        param_ranges = {'threshold': [0.005, 0.01, 0.02, 0.03, 0.05]}
+                    elif args.strategy == 'Mean Reversion':
+                        param_ranges = {
+                            'window': [3, 5, 10, 15, 20],
+                            'buy_threshold': [0.97, 0.98, 0.99],
+                            'sell_threshold': [1.01, 1.02, 1.03]
+                        }
+                    elif args.strategy == 'Predictive':
+                        param_ranges = {
+                            'buy_threshold': [1.005, 1.01, 1.02],
+                            'sell_threshold': [0.98, 0.99, 0.995]
+                        }
+                    elif args.strategy == 'PPO':
+                        param_ranges = {
+                            'actor_lr': [0.0001, 0.0003, 0.001],
+                            'critic_lr': [0.0005, 0.001, 0.002],
+                            'gamma': [0.95, 0.97, 0.99],
+                            'clip_ratio': [0.1, 0.2, 0.3],
+                            'episodes': [5, 10]
+                        }
+                    else:
+                        param_ranges = {}
+                    
+                    # Optimasi
+                    best_params, best_performance, best_portfolio, best_trades = optimizer.optimize(
+                        args.strategy, param_ranges
+                    )
+                    
+                    print_info(f"Parameter optimal: {best_params}")
+                    backtest_results = (best_portfolio, best_trades, best_performance)
+                else:
+                    # Gunakan parameter default
+                    backtest_results = backtester.run(args.strategy)
+                
+                progress.update(backtest_task, completed=100)
             
             # Print backtest results
             print_backtest_results(backtest_results)
             
-            # Step 7: Save backtest results if requested
-            if args.save:
-                print_step(7, 7, "Menyimpan hasil backtest")
+            # Save backtest results if requested
+            if args.save_results:
                 save_backtest_results(predictor, backtest_results, args)
-        else:
-            # Plot and save results if requested
-            if args.save:
-                print_info("Menyimpan hasil...")
-                save_results(predictor, y_true, y_pred, forecast, args)
         
-        print("\n✨ Prediksi selesai! ✨")
+        console.print("\n✨ Selesai! ✨", style="bold green")
         
     except Exception as e:
         print_error(f"Terjadi kesalahan: {str(e)}")
