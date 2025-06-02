@@ -7,6 +7,7 @@ yang digunakan dalam backtest.
 """
 
 from .ppo_agent import PPOTrader
+import numpy as np
 
 class TradingStrategy:
     @staticmethod
@@ -127,124 +128,99 @@ class TradingStrategy:
         return 'HOLD'
     
     @staticmethod
-    def ppo(predicted_prices, actual_prices, index, params=None):
+    def ppo(predicted_prices, actual_prices, current_idx, params=None):
         """
-        Strategi PPO (Proximal Policy Optimization)
-        
-        Menggunakan reinforcement learning untuk menentukan sinyal trading optimal.
+        Strategi trading menggunakan PPO agent
         
         Parameters:
         -----------
         predicted_prices : array-like
-            Harga prediksi dari model
+            Array harga prediksi
         actual_prices : array-like
-            Harga aktual historis
-        index : int
+            Array harga aktual
+        current_idx : int
             Indeks waktu saat ini
         params : dict, optional
-            Parameter tambahan untuk strategi ini
+            Parameter untuk PPO agent
             
         Returns:
         --------
         str
-            Sinyal trading: 'BUY', 'SELL', atau 'HOLD'
+            Sinyal trading ('buy', 'sell', atau 'hold')
         """
-        if params is None or 'ppo_agent' not in params:
-            # Gunakan data sebelumnya untuk training jika belum ada agent
-            if 'training_done' not in params or not params['training_done']:
-                # Dapatkan data untuk training (historis sampai indeks saat ini)
-                train_prices = actual_prices[:index+1]
-                
-                # Buat dan latih model PPO jika belum dilatih
-                if index > 30:  # Pastikan data cukup untuk training
-                    # Siapkan fitur, termasuk prediksi
-                    import numpy as np
-                    
-                    # Gunakan predicted_prices sebagai fitur tambahan jika tersedia
-                    if predicted_prices is not None:
-                        # Pastikan bentuk array konsisten dengan mengubah menjadi vector kolom
-                        pred_reshaped = np.array(predicted_prices[:index+1]).reshape(-1, 1)
-                        actual_reshaped = np.array(actual_prices[:index+1]).reshape(-1, 1)
-                        
-                        # Gabungkan feature dengan bentuk yang konsisten
-                        train_features = np.hstack((pred_reshaped, actual_reshaped))
-                    else:
-                        train_features = None
-                    
-                    # Buat PPOTrader baru
-                    ppo_trader = PPOTrader(
-                        prices=train_prices,
-                        features=train_features,
-                        initial_investment=10000
-                    )
-                    
-                    # Latih model (jumlah episode lebih sedikit untuk runtime lebih cepat)
-                    train_results = ppo_trader.train(episodes=10)
-                    
-                    # Simpan agent di params untuk digunakan selanjutnya
-                    if 'ppo_agent' not in params:
-                        params['ppo_agent'] = ppo_trader
-                        params['training_done'] = True
-                        params['actions'] = []
-                
-                # Jika tidak cukup data atau training belum selesai, gunakan strategi default
-                return TradingStrategy.predictive(predicted_prices, actual_prices, index)
-            
-        # Gunakan agent yang sudah dilatih untuk menghasilkan sinyal
-        if 'ppo_agent' in params:
-            ppo_agent = params['ppo_agent']
-            
-            # Prepare state untuk agent
-            if 'actions' not in params:
-                params['actions'] = []
-                
-            # Buat observasi dari data saat ini
-            features = None
-            if predicted_prices is not None:
-                # Jika ada prediksi, tambahkan sebagai fitur
-                import numpy as np
-                # Reshape menjadi 2D array dengan bentuk konsisten
-                features = np.array([predicted_prices[index]]).reshape(1, 1)
-            
-            # Gunakan dummy environment untuk mendapatkan aksi
-            env = ppo_agent.env
-            env.prices = actual_prices
-            env.current_step = index
-            
-            # Dapatkan observasi
-            if features is not None:
-                if index < len(env.features):
-                    # Pastikan bentuk dimensi sesuai
-                    feature_width = env.features.shape[1]
-                    if feature_width == features.shape[1]:
-                        env.features[index] = features
-                    else:
-                        # Sesuaikan bentuk jika tidak sesuai
-                        env.features[index] = np.zeros(feature_width)
-                        env.features[index, 0] = features[0, 0]
-                else:
-                    # Handle jika index diluar range
-                    dummy_features = np.zeros((1, env.features.shape[1]))
-                    dummy_features[0, 0] = features[0, 0]
-                    env.features = np.concatenate([env.features, dummy_features])
-                    
-            # Get observation
-            observation = env._get_observation()
-            
-            # Get action from agent
-            action, _, _ = ppo_agent.agent.get_action(observation)
-            params['actions'].append(action)
-            
-            # Convert action (0=HOLD, 1=BUY, 2=SELL) to signal
-            if action == 1:
-                return 'BUY'
-            elif action == 2:
-                return 'SELL'
-            else:
-                return 'HOLD'
+        if params is None:
+            params = {
+                'training_done': False,
+                'actor_lr': 0.0003,
+                'critic_lr': 0.001,
+                'gamma': 0.99,
+                'clip_ratio': 0.2,
+                'episodes': 10
+            }
         
-        # Fallback ke strategi predictive
-        return TradingStrategy.predictive(predicted_prices, actual_prices, index)
+        # Jika training belum dilakukan, lakukan training
+        if 'training_done' not in params or not params['training_done']:
+            # Initialize PPO agent
+            from .ppo_agent import PPOAgent
+            agent = PPOAgent(
+                state_dim=5,  # [price, predicted_price, return, volatility, position]
+                action_dim=3,  # buy, sell, hold
+                hidden_dim=64,
+                lr=params['actor_lr'],
+                gamma=params['gamma'],
+                epsilon=params['clip_ratio']
+            )
+            
+            # Prepare training data
+            states = []
+            for i in range(len(actual_prices)):
+                if i > 0:
+                    returns = (actual_prices[i] - actual_prices[i-1]) / actual_prices[i-1]
+                    volatility = np.std([
+                        (actual_prices[j] - actual_prices[j-1]) / actual_prices[j-1]
+                        for j in range(max(0, i-10), i)
+                    ]) if i > 10 else 0
+                else:
+                    returns = 0
+                    volatility = 0
+                    
+                state = np.array([
+                    actual_prices[i],
+                    predicted_prices[i],
+                    returns,
+                    volatility,
+                    0  # initial position
+                ])
+                states.append(state)
+                
+            # Train agent
+            agent.train(np.array(states), n_epochs=params['episodes'])
+            params['agent'] = agent
+            params['training_done'] = True
+        
+        # Get current state
+        if current_idx > 0:
+            returns = (actual_prices[current_idx] - actual_prices[current_idx-1]) / actual_prices[current_idx-1]
+            volatility = np.std([
+                (actual_prices[j] - actual_prices[j-1]) / actual_prices[j-1]
+                for j in range(max(0, current_idx-10), current_idx)
+            ]) if current_idx > 10 else 0
+        else:
+            returns = 0
+            volatility = 0
+            
+        state = np.array([
+            actual_prices[current_idx],
+            predicted_prices[current_idx],
+            returns,
+            volatility,
+            0  # current position
+        ])
+        
+        # Get action from agent
+        action, _ = params['agent'].get_action(state)
+        
+        return 'buy' if action == 0 else 'sell' if action == 1 else 'hold'
     
     @staticmethod
     def get_strategy_function(strategy_name):
