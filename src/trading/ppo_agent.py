@@ -14,6 +14,7 @@ from tensorflow.keras.optimizers import Adam
 import tensorflow.keras.backend as K
 import gym
 from gym import spaces
+from torch.utils.tensorboard import SummaryWriter
 
 class Buffer:
     """
@@ -157,11 +158,20 @@ class TradingEnv(gym.Env):
         # Hitung reward (return dari langkah sebelumnya)
         reward = (new_portfolio_value - prev_portfolio_value) / prev_portfolio_value
         
+        # Drawdown penalty
+        max_portfolio = max(self.portfolio_value_history)
+        drawdown = (max_portfolio - new_portfolio_value) / max_portfolio if max_portfolio > 0 else 0
+        reward -= 0.1 * drawdown  # Penalty drawdown
+        # Transaction cost penalty (implicit in balance update, but can be made explicit)
+        # --- END ADVANCED REWARD SHAPING ---
         # Tambahkan bonus reward untuk nilai akhir portfolio yang lebih tinggi
         if self.done:
             final_return = (new_portfolio_value - self.initial_balance) / self.initial_balance
-            reward += final_return
-            
+            # Sharpe Ratio episode
+            returns = np.diff(self.portfolio_value_history) / np.array(self.portfolio_value_history[:-1])
+            sharpe = np.mean(returns) / (np.std(returns) + 1e-8) * np.sqrt(252) if len(returns) > 1 else 0
+            reward += final_return + 0.2 * sharpe
+        
         return self._get_observation(), reward, self.done, {
             'portfolio_value': new_portfolio_value,
             'balance': self.balance,
@@ -212,46 +222,31 @@ class TradingEnv(gym.Env):
             print(f"Warning: Tidak bisa mengambil features: {e}")
             current_features = np.zeros(self.features.shape[1], dtype=np.float32)
         
-        # Pastikan current_features adalah numpy array
+        # Pastikan current_features adalah numpy array 1D
         if not isinstance(current_features, np.ndarray):
-            if isinstance(current_features, (int, float)):
-                current_features = np.array([current_features], dtype=np.float32)
-            elif isinstance(current_features, list):
-                current_features = np.array(current_features, dtype=np.float32)
-            else:
-                try:
-                    current_features = np.array(current_features, dtype=np.float32)
-                except:
-                    print(f"Warning: Tidak bisa mengkonversi features ke array: {type(current_features)}")
-                    current_features = np.zeros(self.features.shape[1], dtype=np.float32)
-        
-        # Pastikan current_features adalah 1D array
+            current_features = np.array(current_features, dtype=np.float32)
         if len(current_features.shape) > 1:
             current_features = current_features.flatten()
-        
-        # Pastikan tipe data konsisten
         current_features = current_features.astype(np.float32)
         
         # State dasar dengan fitur diperkaya
         base_info = np.array([
-            self.balance / self.initial_balance,  # Normalisasi balance
-            self.shares * current_price / self.initial_balance,  # Posisi relatif terhadap modal awal
+            self.balance / self.initial_balance,
+            self.shares * current_price / self.initial_balance,
             current_price,
-            self.position_value / self.initial_balance,  # Posisi relatif
-            self.unrealized_pnl / self.initial_balance,  # PnL relatif
-            price_sma_ratio_short,  # Relatif ke SMA jangka pendek
-            price_sma_ratio_long,   # Relatif ke SMA jangka panjang
-            volatility              # Volatilitas
+            self.position_value / self.initial_balance,
+            self.unrealized_pnl / self.initial_balance,
+            price_sma_ratio_short,
+            price_sma_ratio_long,
+            volatility
         ], dtype=np.float32)
         
-        # Coba gabungkan arrays
         try:
             obs = np.concatenate([base_info, current_features])
         except Exception as e:
             print(f"Warning: Tidak bisa menggabungkan arrays: {e}, base_info.shape={base_info.shape}, features.shape={current_features.shape}")
             obs = base_info
         
-        # Simpan state_dim untuk PPO Agent
         if not hasattr(self, 'state_dimensions_calculated') or not self.state_dimensions_calculated:
             self.state_dim = len(obs)
             self.state_dimensions_calculated = True
@@ -272,7 +267,8 @@ class PPOAgent:
         clip_ratio=0.2,
         batch_size=64,
         epochs=10,
-        lam=0.95
+        lam=0.95,
+        use_lstm=False
     ):
         """
         Inisialisasi PPO Agent
@@ -297,6 +293,8 @@ class PPOAgent:
             Jumlah epoch training per batch
         lam : float, optional
             Parameter lambda untuk Generalized Advantage Estimation (GAE)
+        use_lstm : bool, optional
+            Gunakan LSTM pada actor dan critic
         """
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -307,6 +305,7 @@ class PPOAgent:
         self.batch_size = batch_size
         self.epochs = epochs
         self.lam = lam
+        self.use_lstm = use_lstm
         
         # Build and compile actor-critic model
         self.actor = self._build_actor()
@@ -319,6 +318,9 @@ class PPOAgent:
         """Buat actor network"""
         state_input = Input(shape=(self.state_dim,))
         x = Dense(64, activation='relu')(state_input)
+        if self.use_lstm:
+            x = tf.expand_dims(x, axis=1)
+            x = LSTM(32, return_sequences=False)(x)
         x = Dense(64, activation='relu')(x)
         output = Dense(self.action_dim, activation='softmax')(x)
         
@@ -330,6 +332,9 @@ class PPOAgent:
         """Buat critic network"""
         state_input = Input(shape=(self.state_dim,))
         x = Dense(64, activation='relu')(state_input)
+        if self.use_lstm:
+            x = tf.expand_dims(x, axis=1)
+            x = LSTM(32, return_sequences=False)(x)
         x = Dense(64, activation='relu')(x)
         output = Dense(1, activation='linear')(x)
         
@@ -569,7 +574,7 @@ class PPOTrader:
     """
     Wrapper class untuk menerapkan PPO dalam konteks trading
     """
-    def __init__(self, prices, features=None, initial_investment=10000):
+    def __init__(self, prices, features=None, initial_investment=10000, log_dir=None):
         """
         Inisialisasi PPO Trader
         
@@ -581,6 +586,8 @@ class PPOTrader:
             Fitur tambahan (termasuk prediksi model)
         initial_investment : float, optional
             Jumlah investasi awal, default 10000
+        log_dir : str, optional
+            Direktori untuk menyimpan log TensorBoard
         """
         # Setup environment
         if features is None:
@@ -605,6 +612,9 @@ class PPOTrader:
         
         self.trained = False
         
+        self.log_dir = log_dir
+        self.writer = SummaryWriter(log_dir) if log_dir else None
+        
     def train(self, episodes=100, max_steps=None):
         """
         Melatih agent PPO
@@ -628,41 +638,28 @@ class PPOTrader:
         episode_rewards = []
         portfolio_values = []
         
-        for episode in range(episodes):
+        for ep in range(episodes):
             state = self.env.reset()
-            episode_reward = 0
-            done = False
-            step = 0
-            
-            while not done and step < max_steps:
-                action, log_prob, value = self.agent.get_action(state)
+            total_reward = 0
+            for t in range(max_steps or len(self.env.prices)):
+                action = self.agent.get_action(state)
                 next_state, reward, done, info = self.env.step(action)
-                
-                self.agent.store_transition(
-                    state, action, reward, value, log_prob, done
-                )
-                
+                self.agent.buffer.states.append(state)
+                self.agent.buffer.actions.append(action)
+                self.agent.buffer.rewards.append(reward)
+                self.agent.buffer.dones.append(done)
                 state = next_state
-                episode_reward += reward
-                step += 1
-                
-            # Dapatkan nilai estimasi state terakhir
-            _, _, last_value = self.agent.get_action(state)
-            
-            # Train the agent
-            self.agent.train()
-            
-            episode_rewards.append(episode_reward)
-            portfolio_values.append(self.env.portfolio_value_history)
-            
-            if episode_reward > best_reward:
-                best_reward = episode_reward
-            
-            if (episode + 1) % 10 == 0:
-                print(f"Episode {episode + 1}/{episodes} - Reward: {episode_reward:.2f}, "
-                      f"Portfolio Value: {self.env.portfolio_value_history[-1]:.2f}")
-                      
-        self.trained = True
+                total_reward += reward
+                if done:
+                    break
+            # Logging ke TensorBoard
+            if self.writer:
+                self.writer.add_scalar('Reward/episode', total_reward, ep)
+                self.writer.add_scalar('PortfolioValue/episode', info['portfolio_value'], ep)
+            # Training PPO
+            self.agent.train(self.agent.batch_size)
+        if self.writer:
+            self.writer.close()
         
         return {
             'episode_rewards': episode_rewards,
@@ -793,3 +790,20 @@ class PPOTrader:
             'performance': performance,
             'actions': actions_taken
         } 
+
+# --- MultiAssetTradingEnv stub ---
+class MultiAssetTradingEnv(gym.Env):
+    def __init__(self, prices_dict, features_dict=None, initial_balance=10000, transaction_fee=0.001):
+        super().__init__()
+        self.prices_dict = prices_dict  # {symbol: price_array}
+        self.features_dict = features_dict or {k: None for k in prices_dict}
+        self.initial_balance = initial_balance
+        self.transaction_fee = transaction_fee
+        # TODO: Implement multi-asset state, action, reward, and step logic
+        # This is a stub for future development
+    def reset(self):
+        pass
+    def step(self, action):
+        pass
+    def _get_observation(self):
+        pass

@@ -130,20 +130,18 @@ class DataPreprocessor:
 
     def calculate_obv(self, close, volume):
         """Menghitung On Balance Volume (OBV) secara manual"""
-        obv = pd.Series(0.0, index=close.index)
-        
-        # OBV hari pertama sama dengan volume hari pertama
-        obv.iloc[0] = volume.iloc[0]
-        
-        # Untuk hari-hari berikutnya
+        # Tetap gunakan indexing numpy agar tidak ambiguous truth value
+        close = np.asarray(close)
+        volume = np.asarray(volume)
+        obv = np.zeros(len(close))
+        obv[0] = volume[0]
         for i in range(1, len(close)):
-            if close.iloc[i] > close.iloc[i-1]:  # Harga naik
-                obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
-            elif close.iloc[i] < close.iloc[i-1]:  # Harga turun
-                obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
+            if close[i] > close[i-1]:  # Harga naik
+                obv[i] = obv[i-1] + volume[i]
+            elif close[i] < close[i-1]:  # Harga turun
+                obv[i] = obv[i-1] - volume[i]
             else:  # Harga tetap
-                obv.iloc[i] = obv.iloc[i-1]
-            
+                obv[i] = obv[i-1]
         return obv
 
     def calculate_ichimoku(self, high, low, close):

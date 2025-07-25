@@ -93,22 +93,20 @@ Melalui GUI, Anda dapat:
 Untuk penggunaan otomatis atau scripting:
 
 ```bash
-python scripts/run_cli.py --ticker AAPL --days 30 --strategy "Trend Following" --allow-short True
+# Prediksi harga saham dengan PatchTST (PyTorch, tanpa Lightning)
+python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 2023-12-31 --model patchtst --lookback 60 --forecast_days 20 --tune --save
 
-# Untuk Memprediksi gunakan perintah
-python scripts/run_cli.py --ticker ADRO.JK --model transformer --lookback 30 --forecast_days 10 --save
-
-# Untuk prediksi dengan PatchTST (PyTorch)
-python scripts/run_cli.py --ticker BMRI.JK --model patchtst --lookback 60 --forecast_days 20 --tune --save
+# Prediksi + backtest dengan PPO
+python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 2023-12-31 --model patchtst --lookback 60 --forecast_days 20 --tune --save --backtest --strategy PPO
 ```
 
 > **Catatan:**
+> - Gunakan argumen dengan underscore, misal: `--start_date`, `--forecast_days`, `--save`, `--backtest`, `--strategy`, dst.
+> - Tidak ada argumen `--mode`, `--ppo`, atau `--save-results`.
+> - PatchTST sudah mendukung positional encoding, multi-output, dan sepenuhnya PyTorch murni (tidak perlu Lightning).
 > - Untuk tuning grid search custom PatchTST (misal: patch_len, stride, d_model, dsb), gunakan GUI. CLI hanya mendukung grid default.
-> - Lihat dokumentasi kode PatchTST di [src/models/patchtst_model.py](src/models/patchtst_model.py)
 
 ### Parameter CLI
-
----
 
 | Argumen        | Keterangan                            | Contoh             |
 |----------------|----------------------------------------|--------------------|
@@ -117,10 +115,12 @@ python scripts/run_cli.py --ticker BMRI.JK --model patchtst --lookback 60 --fore
 | `--end_date`   | Tanggal akhir data historis            | `2024-12-31`       |
 | `--model`      | Jenis model yang digunakan             | `cnn_lstm`, `bilstm`, `transformer`, `ensemble`, `patchtst` |
 | `--lookback`   | Jumlah hari historis untuk input model | `60`               |
-| `--forecast`   | Jumlah hari ke depan untuk prediksi    | `20`               |
-| `--tune`       | Aktifkan hyperparameter tuning         | `True` / `False`   |
-| `--rl`         | Gunakan Reinforcement Learning         | `True` / `False`   |
-| `--episodes`   | Jumlah episode untuk training RL       | `100`              |
+| `--forecast_days`| Jumlah hari ke depan untuk prediksi   | `20`               |
+| `--tune`       | Aktifkan hyperparameter tuning         | (flag, tanpa nilai) |
+| `--save`       | Simpan hasil ke file                   | (flag, tanpa nilai) |
+| `--backtest`   | Jalankan backtest                      | (flag, tanpa nilai) |
+| `--strategy`   | Pilih strategi trading                 | `Trend Following`, `Mean Reversion`, `Predictive`, `PPO` |
+| `--optimize`   | Optimasi parameter strategi            | (flag, tanpa nilai) |
 
 ---
 Parameter yang tersedia:
