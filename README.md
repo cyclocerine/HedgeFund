@@ -1,4 +1,4 @@
-# Open-Predictor
+# HedgeFund AI CORE
 
 Aplikasi prediksi harga saham berbasis deep learning dengan fitur PPO trading signals.
 
@@ -137,7 +137,7 @@ python scripts/run_cli.py --ticker BMRI.JK --mode backtest --strategy PPO --look
 ## Struktur Proyek
 
 ```
-open-predictor/
+HedgeFund/
 ├── scripts/
 │   └── run_cli.py          # Script utama CLI
 ├── src/
