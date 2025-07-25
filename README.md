@@ -19,8 +19,8 @@ Aplikasi prediksi harga saham berbasis deep learning dengan fitur PPO trading si
 
 1. Clone repository:
 ```bash
-git clone https://github.com/cyclocerine/open-predictor.git
-cd open-predictor
+git clone --branch core --single-branch https://github.com/cyclocerine/HedgeFund.git
+cd HedgeFund
 ```
 
 2. Install dependencies:
