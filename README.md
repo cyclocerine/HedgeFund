@@ -100,12 +100,6 @@ python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 20
 python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 2023-12-31 --model patchtst --lookback 60 --forecast_days 20 --tune --save --backtest --strategy PPO
 ```
 
-> **Catatan:**
-> - Gunakan argumen dengan underscore, misal: `--start_date`, `--forecast_days`, `--save`, `--backtest`, `--strategy`, dst.
-> - Tidak ada argumen `--mode`, `--ppo`, atau `--save-results`.
-> - PatchTST sudah mendukung positional encoding, multi-output, dan sepenuhnya PyTorch murni (tidak perlu Lightning).
-> - Untuk tuning grid search custom PatchTST (misal: patch_len, stride, d_model, dsb), gunakan GUI. CLI hanya mendukung grid default.
-
 ### Parameter CLI
 
 | Argumen        | Keterangan                            | Contoh             |
