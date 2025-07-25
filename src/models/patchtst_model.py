@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 import optuna
 from torch.utils.tensorboard import SummaryWriter
+from sklearn.metrics import r2_score
 import math
 
 class PositionalEncoding(nn.Module):
@@ -47,7 +48,7 @@ class PatchTSTWrapper:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         lr = kwargs.pop('lr', 1e-3)
         self.model = PatchTST(input_dim, **kwargs).to(self.device)
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.SmoothL1Loss()  # alias: Huber Loss
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
     def fit(self, X_train, y_train, X_val=None, y_val=None, epochs=50, batch_size=32, verbose=1):
         X_train = torch.tensor(X_train, dtype=torch.float32).to(self.device)
@@ -124,7 +125,9 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
             if writer:
                 writer.close()
             y_pred = model.predict(X_val)
-            score = np.mean((y_pred - y_val.flatten())**2)
+            score = np.mean((y_pred - y_val.flatten())**2)  # MSE
+            r2 = r2_score(y_val.flatten(), y_pred)
+            print(f"[Bayesian] Validation MSE: {score:.4f}, R² Score: {r2:.4f}")
             return score
         import optuna
         study = optuna.create_study(direction='minimize')
@@ -133,6 +136,9 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
         best_model = PatchTSTWrapper(input_dim=X_train.shape[2], **best_params)
         best_model.fit(X_train, y_train, X_val, y_val, epochs=20, batch_size=32, verbose=0)
         best_score = study.best_value
+        y_pred = best_model.predict(X_val)
+        best_r2 = r2_score(y_val.flatten(), y_pred)
+        print(f"Best R² Score: {best_r2:.4f}")
         return best_model, best_params, best_score
     else:
         best_score = float('inf')
@@ -148,7 +154,8 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
             model.fit(X_train, y_train, X_val, y_val, epochs=20, batch_size=32, verbose=0)
             y_pred = model.predict(X_val)
             score = np.mean((y_pred - y_val.flatten())**2)
-            print(f"Validation MSE: {score:.4f}")
+            r2 = r2_score(y_val.flatten(), y_pred)
+            print(f"Validation MSE: {score:.4f}, R² Score: {r2:.4f}")
             if score < best_score:
                 best_score = score
                 best_params = params
