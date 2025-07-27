@@ -67,7 +67,7 @@ class ActorCritic(nn.Module):
         return action_probs, value
 
 class PPOAgent:
-    def __init__(self, state_dim, action_dim, hidden_dim=128, lr=3e-4, gamma=0.99, epsilon=0.2, c1=1, c2=0.01):
+    def __init__(self, state_dim, action_dim=3, hidden_dim=128, lr=3e-4, gamma=0.99, epsilon=0.2, c1=1, c2=0.01):
         """
         Inisialisasi PPO Agent dengan parameter yang dioptimalkan
         
@@ -328,17 +328,6 @@ class TradingEnv(gym.Env):
         self.features = np.array(features) if features is not None else np.zeros((len(prices), 1))
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
-        self.lookback = lookback
-        self.forecast_days = forecast_days
-        
-        # Validasi lookback dan forecast_days
-        if self.lookback >= len(prices):
-            self.lookback = len(prices) - 1
-            print(f"Warning: lookback terlalu besar, disesuaikan menjadi {self.lookback}")
-        
-        if self.forecast_days >= len(prices):
-            self.forecast_days = len(prices) - 1
-            print(f"Warning: forecast_days terlalu besar, disesuaikan menjadi {self.forecast_days}")
         
         # Hitung fitur dasar
         self.returns = np.zeros_like(prices)
@@ -346,23 +335,26 @@ class TradingEnv(gym.Env):
         
         # Volatilitas (standar deviasi return rolling window)
         self.volatility = np.zeros_like(prices)
-        window = min(10, self.lookback)  # Gunakan lookback untuk window jika lebih kecil
+        window = 10
         for i in range(window, len(self.returns)):
             self.volatility[i] = np.std(self.returns[i-window+1:i+1])
         
-        # State space: [price, return, volatility, position, balance] + features + lookback history
+        # State space: [price, return, volatility, position, balance] + features
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(5 + self.features.shape[1] + self.lookback,),
+            shape=(5 + self.features.shape[1] + lookback,),
             dtype=np.float32
         )
         
         # Action space: 0 = buy, 1 = sell, 2 = hold
         self.action_space = spaces.Discrete(3)
         
-        self.reset()
+        self.lookback = lookback
+        self.forecast_days = forecast_days
         
+        self.reset()
+    
     def reset(self):
         """Reset environment ke kondisi awal"""
         self.current_step = 0
@@ -380,31 +372,26 @@ class TradingEnv(gym.Env):
         position = self.shares * price / self.initial_balance
         balance = self.balance / self.initial_balance
         
-        # Tambahkan lookback history
-        start_idx = max(0, self.current_step - self.lookback)
-        history = self.prices[start_idx:self.current_step+1]
-        if len(history) < self.lookback:
-            # Pad dengan nilai pertama jika history kurang dari lookback
-            padding = np.full(self.lookback - len(history), history[0])
-            history = np.concatenate([padding, history])
-        
-        # Normalisasi history
-        history = history / self.prices[0]
-        
         state = np.array([
             price / self.prices[0],  # Normalisasi harga
             ret,
             vol,
             position,
             balance
-        ])
+        ], dtype=np.float32)
         
         # Tambahkan features jika ada
         if self.features is not None:
             state = np.concatenate([state, self.features[self.current_step]])
         
-        # Tambahkan history
-        state = np.concatenate([state, history[-self.lookback:]])
+        # Tambahkan data historis
+        if self.current_step >= self.lookback:
+            state = np.concatenate([state, self.returns[self.current_step-self.lookback:self.current_step]])
+        else:
+            state = np.concatenate([state, np.zeros(self.lookback-self.current_step)])
+        
+        # Normalisasi data historis
+        state[:self.lookback] = (state[:self.lookback] - state[:self.lookback].mean()) / (state[:self.lookback].std() + 1e-8)
         
         return state
         
@@ -512,17 +499,6 @@ class PPOTrader:
         self.prices = np.array(prices)
         self.features = np.array(features) if features is not None else np.zeros((len(prices), 1))
         self.initial_investment = initial_investment
-        self.lookback = lookback
-        self.forecast_days = forecast_days
-        
-        # Validasi lookback dan forecast_days
-        if self.lookback >= len(prices):
-            self.lookback = len(prices) - 1
-            print(f"Warning: lookback terlalu besar, disesuaikan menjadi {self.lookback}")
-        
-        if self.forecast_days >= len(prices):
-            self.forecast_days = len(prices) - 1
-            print(f"Warning: forecast_days terlalu besar, disesuaikan menjadi {self.forecast_days}")
         
         # Hitung fitur dasar
         self.returns = np.zeros_like(prices)
@@ -530,16 +506,19 @@ class PPOTrader:
         
         # Volatilitas (standar deviasi return rolling window)
         self.volatility = np.zeros_like(prices)
-        window = min(10, self.lookback)  # Gunakan lookback untuk window jika lebih kecil
+        window = 10
         for i in range(window, len(self.returns)):
             self.volatility[i] = np.std(self.returns[i-window+1:i+1])
         
-        # State dimensi: [price, return, volatility, position, balance] + features + lookback history
-        self.state_dim = 5 + self.features.shape[1] + self.lookback
+        # State dimensi: [price, return, volatility, position, balance] + features
+        self.state_dim = 5 + self.features.shape[1] + lookback
         self.action_dim = 3  # buy, sell, hold
         
         # Inisialisasi agent
         self.agent = PPOAgent(self.state_dim, self.action_dim)
+        
+        self.lookback = lookback
+        self.forecast_days = forecast_days
         
         self.reset()
     
@@ -560,17 +539,6 @@ class PPOTrader:
         position = self.shares * price / self.initial_investment
         balance = self.balance / self.initial_investment
         
-        # Tambahkan lookback history
-        start_idx = max(0, self.current_step - self.lookback)
-        history = self.prices[start_idx:self.current_step+1]
-        if len(history) < self.lookback:
-            # Pad dengan nilai pertama jika history kurang dari lookback
-            padding = np.full(self.lookback - len(history), history[0])
-            history = np.concatenate([padding, history])
-        
-        # Normalisasi history
-        history = history / self.prices[0]
-        
         state = np.array([
             price / self.prices[0],  # Normalisasi harga
             ret,
@@ -583,8 +551,14 @@ class PPOTrader:
         if self.features is not None:
             state = np.concatenate([state, self.features[self.current_step]])
         
-        # Tambahkan history
-        state = np.concatenate([state, history[-self.lookback:]])
+        # Tambahkan data historis
+        if self.current_step >= self.lookback:
+            state = np.concatenate([state, self.returns[self.current_step-self.lookback:self.current_step]])
+        else:
+            state = np.concatenate([state, np.zeros(self.lookback-self.current_step)])
+        
+        # Normalisasi data historis
+        state[:self.lookback] = (state[:self.lookback] - state[:self.lookback].mean()) / (state[:self.lookback].std() + 1e-8)
         
         return state
     
@@ -623,29 +597,19 @@ class PPOTrader:
             new_portfolio_value = self.balance + self.shares * new_price
             self.portfolio_values.append(new_portfolio_value)
             
-            # Calculate reward
+            # Calculate reward (return)
             reward = (new_portfolio_value - old_portfolio_value) / old_portfolio_value
             
-            # Add penalty for frequent trading to encourage holding
-            if action != 2:  # If not hold
-                reward -= 0.0001  # Small penalty for trading
-            
-            # Add bonus for profitable trades
-            if new_portfolio_value > old_portfolio_value:
-                reward += 0.0001  # Small bonus for profitable trades
-            
+            # Get new state
             next_state = self._get_state()
         else:
-            # Final reward based on overall performance
-            final_return = (self.portfolio_values[-1] - self.initial_balance) / self.initial_balance
-            reward = final_return
+            reward = 0
             next_state = self._get_state()
         
         info = {
             'portfolio_value': self.portfolio_values[-1],
             'shares': self.shares,
-            'balance': self.balance,
-            'return': (self.portfolio_values[-1] - self.initial_balance) / self.initial_balance
+            'balance': self.balance
         }
         
         return next_state, reward, done, info
@@ -707,7 +671,7 @@ class PPOTrader:
             'portfolio_values': all_portfolio_values,
             'best_reward': best_reward
         }
-        
+    
     def predict(self, state):
         """
         Memprediksi aksi untuk state tertentu
