@@ -58,27 +58,33 @@ class PatchTSTWrapper:
         n = X_train.shape[0]
         for epoch in range(epochs):
             self.model.train()
-            perm = torch.randperm(n)
-            X_train = X_train[perm]
-            y_train = y_train[perm]
+
             for i in range(0, n, batch_size):
                 xb = X_train[i:i+batch_size]
                 yb = y_train[i:i+batch_size]
                 self.optimizer.zero_grad()
-                out = self.model(xb)
+                out = self.model(X.unsqueeze(1))
                 loss = self.criterion(out, yb)
                 loss.backward()
                 self.optimizer.step()
             if verbose and (epoch % 10 == 0 or epoch == epochs-1):
                 print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}")
-    def predict(self, X):
+                
+                if X_val is not None and y_val is not None:
+                self.model.eval()
+                val_pred = self.predict(X_val)
+                val_r2 = r2_score(y_val.flatten(), val_pred)
+                print(f"Val R²: {val_r2:.4f}")
+    def predict(self, X, batch_size=32):
         self.model.eval()
         X = torch.tensor(X, dtype=torch.float32).to(self.device)
+        preds = []
         with torch.no_grad():
-            out = self.model(X)
-        if out.shape[1] == 1:
-            return out.cpu().numpy().flatten()
-        return out.cpu().numpy()
+            for i in range(0, len(X), batch_size):
+                xb = X[i:i+batch_size].unsqueeze(1)  # [B, 1, T]
+                out = self.model(xb)
+                preds.append(out.cpu())
+        return torch.cat(preds, dim=0).numpy().flatten()
     def save(self, path):
         torch.save(self.model.state_dict(), path)
     def load(self, path):
@@ -109,9 +115,6 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
             n = X_torch.shape[0]
             for epoch in range(20):
                 model.model.train()
-                perm = torch.randperm(n)
-                X_torch = X_torch[perm]
-                y_torch = y_torch[perm]
                 for i in range(0, n, 32):
                     xb = X_torch[i:i+32]
                     yb = y_torch[i:i+32]
