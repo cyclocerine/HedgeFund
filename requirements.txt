@@ -1,6 +1,6 @@
 yfinance
 tensorflow
-keras>=
+keras
 scikit-learn
 PyQt5
 keras-tuner
