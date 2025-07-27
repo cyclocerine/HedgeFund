@@ -1,4 +1,4 @@
-# Open-Predictor
+# HedgeFund AI
 
 Aplikasi prediksi harga saham berbasis deep learning dengan fitur PPO trading signals.
 
@@ -19,8 +19,8 @@ Aplikasi prediksi harga saham berbasis deep learning dengan fitur PPO trading si
 
 1. Clone repository:
 ```bash
-git clone https://github.com/cyclocerine/open-predictor.git
-cd open-predictor
+git clone --branch core https://github.com/cyclocerine/HedgeFund.git
+cd HedgeFund
 ```
 
 2. Install dependencies:
