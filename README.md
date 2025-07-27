@@ -1,4 +1,4 @@
-# Open-Predictor
+# HedgeFund AI
 
 Aplikasi prediksi harga saham berbasis deep learning dengan fitur PPO trading signals.
 
