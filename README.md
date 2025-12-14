@@ -3,182 +3,182 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white)
 
-# 🤖💹 AI Hedge Fund
+# AI Hedge Fund
 
-Sistem kecerdasan buatan untuk manajemen portofolio dan perdagangan otomatis berbasis **PyTorch** dengan kemampuan adaptasi tinggi pada berbagai kondisi pasar.
+An artificial intelligence system for portfolio management and automated trading based on **PyTorch** with high adaptability to various market conditions.
 
 <div align="center">
   <img src="results/integrated_system_test.png" alt="AI Hedge Fund Performance" width="800">
-  <p><em>Kinerja Sistem AI Hedge Fund pada Pengujian Terintegrasi</em></p>
+  <p><em>AI Hedge Fund System Performance on Integrated Testing</em></p>
 </div>
 
-## 📋 Deskripsi
+## Description
 
-AI Hedge Fund adalah platform trading algoritmik canggih yang menggabungkan manajemen risiko adaptif, perdagangan multi-aset, model machine learning, dan strategi perdagangan otomatis. Sistem ini dirancang untuk mengoptimalkan keputusan investasi melalui kombinasi algoritma trading tradisional dan teknik kecerdasan buatan modern.
+AI Hedge Fund is an advanced algorithmic trading platform that combines adaptive risk management, multi-asset trading, machine learning models, and automated trading strategies. This system is designed to optimize investment decisions through a combination of traditional trading algorithms and modern artificial intelligence techniques.
 
-Sistem ini merupakan evolusi dari model prediksi harga saham sederhana, yang kini telah menjadi platform trading lengkap dengan kemampuan pengelolaan risiko, multi-aset, dan pembelajaran mesin lanjutan.
+This system is an evolution from a simple stock price prediction model, which has now become a complete trading platform with risk management capabilities, multi-asset support, and advanced machine learning.
 
-## 🌟 Fitur Utama
+## Key Features
 
-### 1. Manajemen Risiko Adaptif
-- **Stop Loss Dinamis**: Batas kerugian otomatis berdasarkan volatilitas aset
-- **Trailing Stop**: Mengunci keuntungan secara otomatis saat harga bergerak menguntungkan
-- **Sizing Posisi Berbasis Volatilitas**: Menyesuaikan ukuran posisi berdasarkan tingkat risiko pasar
-- **Analisis Drawdown**: Mengurangi eksposur saat portofolio mengalami kerugian berturut-turut
+### 1. Adaptive Risk Management
+- **Dynamic Stop Loss**: Automatic loss limits based on asset volatility
+- **Trailing Stop**: Automatically locks in profits as price moves favorably
+- **Volatility-Based Position Sizing**: Adjusts position size based on market risk level
+- **Drawdown Analysis**: Reduces exposure when portfolio experiences consecutive losses
 
-### 2. Trading Multi-Aset
-- **Alokasi Modal Dinamis**: Mendistribusikan modal berdasarkan peluang dan risiko
-- **Dukungan Berbagai Kelas Aset**: Saham, forex, crypto, komoditas, dan lainnya
-- **Posisi Parsial**: Kemampuan membuka/menutup sebagian posisi untuk manajemen risiko lebih baik
-- **Short Selling**: Memanfaatkan peluang di pasar menurun (bearish)
+### 2. Multi-Asset Trading
+- **Dynamic Capital Allocation**: Distributes capital based on opportunities and risks
+- **Multiple Asset Class Support**: Stocks, forex, crypto, commodities, and more
+- **Partial Positions**: Ability to open/close partial positions for better risk management
+- **Short Selling**: Capitalize on opportunities in bearish markets
 
-### 3. Strategi Trading Canggih
-- **Trend Following**: Mengikuti momentum harga dengan indikator teknikal
-- **Mean Reversion**: Memanfaatkan pergerakan harga kembali ke rata-rata
-- **Predictive**: Menggunakan model machine learning untuk prediksi harga
-- **PPO (Proximal Policy Optimization)**: Pengambilan keputusan berbasis reinforcement learning
+### 3. Advanced Trading Strategies
+- **Trend Following**: Follow price momentum with technical indicators
+- **Mean Reversion**: Capitalize on price movements returning to the mean
+- **Predictive**: Use machine learning models for price prediction
+- **PPO (Proximal Policy Optimization)**: Reinforcement learning-based decision making
 
-### 4. Analisis Teknikal Komprehensif
-- **30+ Indikator Teknikal**: RSI, MACD, Bollinger Bands, ATR, dan banyak lainnya
-- **Analisis Candle Patterns**: Deteksi pola-pola candlestick klasik
-- **Volume Analysis**: Konfirmasi pergerakan harga dengan volume
-- **Volatility Metrics**: Pengukuran dan analisis volatilitas berbagai timeframe
+### 4. Comprehensive Technical Analysis
+- **30+ Technical Indicators**: RSI, MACD, Bollinger Bands, ATR, and many more
+- **Candlestick Pattern Analysis**: Detection of classic candlestick patterns
+- **Volume Analysis**: Price movement confirmation with volume
+- **Volatility Metrics**: Measurement and analysis of volatility across various timeframes
 
-### 5. Backtesting dan Evaluasi
-- **Simulasi Historis Realistis**: Termasuk slippage dan biaya transaksi
-- **Metrik Kinerja Komprehensif**: Sharpe ratio, max drawdown, win rate, dll
-- **Visualisasi Hasil**: Grafik perbandingan dan analisis visual
-- **What-If Analysis**: Pengujian berbagai parameter dan skenario pasar
+### 5. Backtesting and Evaluation
+- **Realistic Historical Simulation**: Including slippage and transaction costs
+- **Comprehensive Performance Metrics**: Sharpe ratio, max drawdown, win rate, etc.
+- **Result Visualization**: Comparison charts and visual analysis
+- **What-If Analysis**: Testing various parameters and market scenarios
 
-### 6. Model PatchTST (PyTorch)
-- **PatchTST**: Model transformer berbasis patch untuk time series forecasting, sangat efektif untuk data finansial dan prediksi harga saham.
-- **Keunggulan**: Lebih efisien dan akurat pada data time series panjang, mendukung hyperparameter tuning dengan Optuna.
-- **Tuning**: Mendukung Bayesian optimization dan grid search untuk hyperparameter tuning.
-- **Dokumentasi kode**: [src/models/patchtst_model.py](src/models/patchtst_model.py)
+### 6. PatchTST Model (PyTorch)
+- **PatchTST**: Patch-based transformer model for time series forecasting, highly effective for financial data and stock price prediction.
+- **Advantages**: More efficient and accurate on long time series data, supports hyperparameter tuning with Optuna.
+- **Tuning**: Supports Bayesian optimization and grid search for hyperparameter tuning.
+- **Code Documentation**: [src/models/patchtst_model.py](src/models/patchtst_model.py)
 
-### 7. CLI dengan Tampilan Interaktif 🆕
-- **Rich Terminal UI**: Tampilan CLI cantik dengan progress bar, spinner, dan tabel berwarna
-- **Animasi Loading**: Progress bar real-time saat training dan prediksi
-- **PPO Trading Signals**: Sinyal trading otomatis dengan tingkat kepercayaan
+### 7. Interactive CLI Display
+- **Rich Terminal UI**: Beautiful CLI display with progress bars, spinners, and colored tables
+- **Loading Animation**: Real-time progress bar during training and prediction
+- **PPO Trading Signals**: Automatic trading signals with confidence levels
 
-## 💻 Penggunaan Mendetail
+## Detailed Usage
 
-### Instalasi
+### Installation
 
 ```bash
-# Clone repositori
+# Clone repository
 git clone https://github.com/cyclocerine/HedgeFund.git
 cd HedgeFund
 
-# Buat environment virtual (opsional tapi direkomendasikan)
+# Create virtual environment (optional but recommended)
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# atau
+# or
 venv\Scripts\activate     # Windows
 
-# Instal dependensi
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Menjalankan Aplikasi GUI
+### Running the GUI Application
 
-Aplikasi GUI menyediakan antarmuka visual lengkap untuk berinteraksi dengan sistem:
+The GUI application provides a complete visual interface to interact with the system:
 
 ```bash
 python scripts/run_app.py
 ```
 
-Melalui GUI, Anda dapat:
-- Memilih aset untuk dianalisis
-- Melihat prediksi dan sinyal trading
-- Menjalankan backtesting dengan berbagai strategi
-- Memonitor performa portofolio
-- Menyesuaikan parameter risk management
+Through the GUI, you can:
+- Select assets to analyze
+- View predictions and trading signals
+- Run backtesting with various strategies
+- Monitor portfolio performance
+- Adjust risk management parameters
 
-### Menjalankan Aplikasi Command-Line
+### Running the Command-Line Application
 
-CLI dengan tampilan interaktif dan progress bar:
+CLI with interactive display and progress bar:
 
 ```bash
-# Prediksi harga saham (default: 6 tahun data)
-python scripts/run_cli.py --ticker BBCA.JK --mode predict --forecast-days 20
+# Stock price prediction (default: 6 years of data)
+python scripts/run_cli.py --ticker AAPL --mode predict --forecast-days 20
 
-# Prediksi dengan hyperparameter tuning
-python scripts/run_cli.py --ticker BMRI.JK --mode predict --tune --forecast-days 20 --save-results
+# Prediction with hyperparameter tuning
+python scripts/run_cli.py --ticker MSFT --mode predict --tune --forecast-days 20 --save-results
 
-# Prediksi dengan PPO trading signals
-python scripts/run_cli.py --ticker BBCA.JK --mode predict --ppo --forecast-days 10
+# Prediction with PPO trading signals
+python scripts/run_cli.py --ticker AAPL --mode predict --ppo --forecast-days 10
 
-# Backtest dengan strategi
-python scripts/run_cli.py --ticker BBCA.JK --mode backtest --strategy Predictive
+# Backtest with strategy
+python scripts/run_cli.py --ticker AAPL --mode backtest --strategy Predictive
 
-# Prediksi dengan periode custom
+# Prediction with custom period
 python scripts/run_cli.py --ticker AAPL --mode predict --start-date 2020-01-01 --end-date 2024-12-31
 ```
 
-#### Contoh Output CLI:
+#### CLI Output Example:
 
 ```
-╔════════════════════════════════════════════════════════════╗
-║  🚀 APLIKASI PREDIKSI HARGA SAHAM                          ║
-║  📊 PatchTST Deep Learning | 🤖 PPO Trading | ⚡ CUDA      ║
-╚════════════════════════════════════════════════════════════╝
++============================================================+
+|  STOCK PRICE PREDICTION APPLICATION                        |
+|  PatchTST Deep Learning | PPO Trading | CUDA               |
++============================================================+
 
-  ✅ Data siap!             ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-  ✅ Model terlatih (27.1s) ━━━━━━━━━━━━━━━━━ 100% 0:00:27
-  ✅ Prediksi selesai!      ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-  ✅ Evaluasi selesai!      ━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  [OK] Data ready!            ================= 100% 0:00:00
+  [OK] Model trained (27.1s)  ================= 100% 0:00:27
+  [OK] Prediction complete!   ================= 100% 0:00:00
+  [OK] Evaluation complete!   ================= 100% 0:00:00
 
-  🔮 Prediksi untuk Hari-hari Berikutnya
-  ╭──────┬─────────────┬──────────╮
-  │ Hari │       Harga │   Tren   │
-  ├──────┼─────────────┼──────────┤
-  │  1   │ Rp 9,289.25 │          │
-  │  2   │ Rp 9,328.11 │ ↗️ +0.42% │
-  │  3   │ Rp 9,308.85 │ ↘️ -0.21% │
-  ╰──────┴─────────────┴──────────╯
+  Predictions for Upcoming Days
+  +------+-------------+------------+
+  | Day  |       Price |    Trend   |
+  +------+-------------+------------+
+  |  1   |   $150.25   |            |
+  |  2   |   $152.11   | [+] +1.24% |
+  |  3   |   $151.85   | [-] -0.17% |
+  +------+-------------+------------+
 
-  ╭──────────────────────────────────────╮
-  │  ✨ SELESAI ✨                        │
-  │  Terima kasih telah menggunakan!    │
-  ╰──────────────────────────────────────╯
+  +--------------------------------------+
+  |  ** COMPLETE **                      |
+  |  Thank you for using!                |
+  +--------------------------------------+
 ```
 
-### Parameter CLI
+### CLI Parameters
 
-| Argumen           | Keterangan                              | Contoh                    |
+| Argument          | Description                             | Example                   |
 |-------------------|-----------------------------------------|---------------------------|
-| `--ticker`        | Simbol saham/komoditas                  | `AAPL`, `BBCA.JK`         |
-| `--mode`          | Mode operasi                            | `predict`, `backtest`     |
-| `--start-date`    | Tanggal awal data (YYYY-MM-DD)          | `2020-01-01`              |
-| `--end-date`      | Tanggal akhir data                      | `2024-12-31`              |
-| `--model`         | Jenis model (hanya `patchtst`)          | `patchtst`                |
-| `--lookback`      | Jumlah hari historis untuk input        | `60`                      |
-| `--forecast-days` | Jumlah hari ke depan untuk prediksi     | `20`                      |
-| `--tune`          | Aktifkan hyperparameter tuning          | (flag)                    |
-| `--ppo`           | Aktifkan PPO trading signals            | (flag)                    |
-| `--save-results`  | Simpan hasil ke file                    | (flag)                    |
-| `--strategy`      | Pilih strategi (untuk backtest)         | `Trend Following`, `PPO`  |
-| `--initial-balance`| Modal awal untuk backtest              | `10000000`                |
-| `--optimize`      | Optimasi parameter strategi             | (flag)                    |
+| `--ticker`        | Stock/commodity symbol                  | `AAPL`, `MSFT`            |
+| `--mode`          | Operation mode                          | `predict`, `backtest`     |
+| `--start-date`    | Start date (YYYY-MM-DD)                 | `2020-01-01`              |
+| `--end-date`      | End date                                | `2024-12-31`              |
+| `--model`         | Model type (only `patchtst`)            | `patchtst`                |
+| `--lookback`      | Number of historical days for input     | `60`                      |
+| `--forecast-days` | Number of days to forecast              | `20`                      |
+| `--tune`          | Enable hyperparameter tuning            | (flag)                    |
+| `--ppo`           | Enable PPO trading signals              | (flag)                    |
+| `--save-results`  | Save results to file                    | (flag)                    |
+| `--strategy`      | Select strategy (for backtest)          | `Trend Following`, `PPO`  |
+| `--initial-balance`| Initial capital for backtest           | `10000000`                |
+| `--optimize`      | Optimize strategy parameters            | (flag)                    |
 
 
-#### 1. Backtesting Strategi Tunggal
+#### 1. Single Strategy Backtesting
 
 ```python
 from src.trading import Backtester
 from src.models import StockPredictor
 import matplotlib.pyplot as plt
 
-# Load dan prediksi data
-predictor = StockPredictor(ticker="ADRO.JK", start_date="2022-01-01")
+# Load and predict data
+predictor = StockPredictor(ticker="AAPL", start_date="2022-01-01")
 predictor.load_data()
 predictor.train_model(model_type="ensemble")
 actual_prices = predictor.y_test
 predicted_prices = predictor.predict()
 dates = predictor.test_dates
 
-# Setup dan jalankan backtest
+# Setup and run backtest
 backtester = Backtester(
     actual_prices=actual_prices,
     predicted_prices=predicted_prices,
@@ -193,25 +193,25 @@ portfolio_values, trades, performance = backtester.run(
     max_position_size=0.5
 )
 
-# Tampilkan hasil
+# Display results
 print(f"Return: {performance['total_return']:.2f}%")
 print(f"Sharpe Ratio: {performance['sharpe_ratio']:.4f}")
 print(f"Max Drawdown: {performance['max_drawdown']:.2f}%")
 print(f"Win Rate: {performance['win_rate']:.2f}%")
 print(f"Trades: {performance['num_trades']}")
 
-# Visualisasi hasil
+# Visualize results
 fig = backtester.plot_results(benchmark=actual_prices)
 plt.show()
 ```
 
-#### 2. Trading Multi-Aset dengan Risk Management
+#### 2. Multi-Asset Trading with Risk Management
 
 ```python
 from src.trading import MultiAssetPortfolio, RiskManager
 from datetime import datetime
 
-# Inisialisasi risk manager
+# Initialize risk manager
 risk_manager = RiskManager(
     max_drawdown=0.1,
     max_position_size=0.2, 
@@ -219,35 +219,35 @@ risk_manager = RiskManager(
     trailing_stop=0.03
 )
 
-# Inisialisasi portofolio
+# Initialize portfolio
 portfolio = MultiAssetPortfolio(
-    assets=["ADRO.JK", "BBCA.JK", "ANTM.JK", "BTCUSDT"],
+    assets=["AAPL", "MSFT", "GOOGL", "BTCUSDT"],
     initial_capital=100000000,
     transaction_fee=0.001
 )
 
-# Harga terkini
+# Current prices
 current_prices = {
-    "ADRO.JK": 2550,
-    "BBCA.JK": 9200,
-    "ANTM.JK": 1865,
+    "AAPL": 150.25,
+    "MSFT": 270.50,
+    "GOOGL": 125.75,
     "BTCUSDT": 43500
 }
 
-# Hitung volatilitas (dalam implementasi nyata, gunakan data historis)
+# Calculate volatility (in real implementation, use historical data)
 volatilities = {
-    "ADRO.JK": 0.02,
-    "BBCA.JK": 0.01,
-    "ANTM.JK": 0.025,
+    "AAPL": 0.02,
+    "MSFT": 0.01,
+    "GOOGL": 0.025,
     "BTCUSDT": 0.04
 }
 
-# Buat sinyal trading
+# Create trading signals
 signals = []
 for symbol, volatility in volatilities.items():
-    # Contoh: beli aset dengan volatilitas rendah, short yang tinggi
+    # Example: buy low volatility assets, short high volatility ones
     if volatility < 0.02:
-        # Hitung ukuran posisi berdasarkan volatilitas
+        # Calculate position size based on volatility
         position_size = risk_manager.size_position(
             'BUY', current_prices[symbol], portfolio.cash, volatility
         )
@@ -268,20 +268,20 @@ for symbol, volatility in volatilities.items():
             'volatility': volatility
         })
 
-# Eksekusi transaksi
+# Execute transactions
 result = portfolio.allocate_capital(signals, current_prices, datetime.now())
 
-# Lihat hasil
+# View results
 print(f"Trades Executed: {len(result['executed_orders'])}")
 print(f"Portfolio Value: {result['portfolio_value']:.2f}")
 
-# Lihat posisi aktif
+# View active positions
 positions_df = portfolio.get_positions_df()
 print("\nActive Positions:")
 print(positions_df)
 ```
 
-#### 3. Menggunakan PPO Agent dengan Indikator Teknikal
+#### 3. Using PPO Agent with Technical Indicators
 
 ```python
 from src.trading import PPOTrader
@@ -291,16 +291,16 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 
 # Download data
-data = yf.download("ADRO.JK", period="1y")
+data = yf.download("AAPL", period="1y")
 
-# Tambahkan indikator teknikal
+# Add technical indicators
 data = add_technical_indicators(data)
 
-# Pilih subset indikator untuk state PPO Agent
+# Select subset of indicators for PPO Agent state
 feature_columns = ['RSI', 'MACD', 'MACD_Signal', 'ATR_14', 
                    'BB_Width', 'Volatility_20', 'SMA_Cross', 'Daily_Return']
 
-# Hapus baris dengan NaN (indikator memerlukan data historis)
+# Remove rows with NaN (indicators require historical data)
 data = data.dropna(subset=feature_columns)
 
 # Setup PPO Trader
@@ -317,23 +317,23 @@ train_results = ppo_trader.train(episodes=50)
 # Backtest
 backtest_results = ppo_trader.backtest()
 
-# Visualisasi hasil
+# Visualize results
 plt.figure(figsize=(12, 8))
 
 # Plot portfolio value
 plt.subplot(2, 1, 1)
-plt.plot(backtest_results['portfolio_values'], label='Nilai Portofolio')
-plt.title('Kinerja PPO Agent')
-plt.xlabel('Hari')
-plt.ylabel('Nilai')
+plt.plot(backtest_results['portfolio_values'], label='Portfolio Value')
+plt.title('PPO Agent Performance')
+plt.xlabel('Day')
+plt.ylabel('Value')
 plt.grid(True)
 plt.legend()
 
-# Plot sinyal trading
+# Plot trading signals
 plt.subplot(2, 1, 2)
-plt.plot(data['Close'][-len(backtest_results['actions']):].values, label='Harga')
+plt.plot(data['Close'][-len(backtest_results['actions']):].values, label='Price')
 
-# Tandai aksi buy/sell
+# Mark buy/sell actions
 for i, action in enumerate(backtest_results['actions']):
     if action == 1:  # Buy
         plt.scatter(i, data['Close'][-len(backtest_results['actions'])+i], 
@@ -342,116 +342,116 @@ for i, action in enumerate(backtest_results['actions']):
         plt.scatter(i, data['Close'][-len(backtest_results['actions'])+i], 
                    color='red', marker='v')
 
-plt.title('Sinyal Trading')
-plt.xlabel('Hari')
-plt.ylabel('Harga')
+plt.title('Trading Signals')
+plt.xlabel('Day')
+plt.ylabel('Price')
 plt.grid(True)
 
 plt.tight_layout()
 plt.show()
 ```
 
-## 📊 Arsitektur Sistem
+## System Architecture
 
-AI Hedge Fund dibangun dengan arsitektur modular yang memungkinkan fleksibilitas dan ekstensi:
+AI Hedge Fund is built with a modular architecture that allows flexibility and extension:
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                          AI Hedge Fund                            │
-└───────────────┬───────────────────────────────────┬───────────────┘
-                │                                   │
-┌───────────────▼───────────────┐     ┌─────────────▼───────────────┐
-│      Data Processing Layer    │     │     Trading Engine Layer    │
-│                               │     │                             │
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │    Data Collection      │  │     │  │    Strategy Engine      ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │  Feature Engineering    │  │     │  │      Risk Manager       ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │   Technical Indicators  │  │     │  │   Portfolio Manager     ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-└───────────────────────────────┘     └─────────────────────────────┘
-                │                                   │
-┌───────────────▼───────────────┐     ┌─────────────▼───────────────┐
-│    Prediction Models Layer    │     │     Evaluation Layer        │
-│                               │     │                             │
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │     LSTM Predictor      │  │     │  │      Backtesting        ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │    Ensemble Models      │  │     │  │   Performance Metrics   ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-│  ┌─────────────────────────┐  │     │  ┌─────────────────────────┐│
-│  │      PPO Agent          │  │     │  │     Visualization       ││
-│  └─────────────────────────┘  │     │  └─────────────────────────┘│
-└───────────────────────────────┘     └─────────────────────────────┘
++-------------------------------------------------------------------+
+|                          AI Hedge Fund                            |
++---------------+-----------------------------------+---------------+
+                |                                   |
++---------------v---------------+     +-------------v---------------+
+|      Data Processing Layer    |     |     Trading Engine Layer    |
+|                               |     |                             |
+|  +-------------------------+  |     |  +-------------------------+|
+|  |    Data Collection      |  |     |  |    Strategy Engine      ||
+|  +-------------------------+  |     |  +-------------------------+|
+|  +-------------------------+  |     |  +-------------------------+|
+|  |  Feature Engineering    |  |     |  |      Risk Manager       ||
+|  +-------------------------+  |     |  +-------------------------+|
+|  +-------------------------+  |     |  +-------------------------+|
+|  |   Technical Indicators  |  |     |  |   Portfolio Manager     ||
+|  +-------------------------+  |     |  +-------------------------+|
++-------------------------------+     +-----------------------------+
+                |                                   |
++---------------v---------------+     +-------------v---------------+
+|    Prediction Models Layer    |     |     Evaluation Layer        |
+|                               |     |                             |
+|  +-------------------------+  |     |  +-------------------------+|
+|  |     LSTM Predictor      |  |     |  |      Backtesting        ||
+|  +-------------------------+  |     |  +-------------------------+|
+|  +-------------------------+  |     |  +-------------------------+|
+|  |    Ensemble Models      |  |     |  |   Performance Metrics   ||
+|  +-------------------------+  |     |  +-------------------------+|
+|  +-------------------------+  |     |  +-------------------------+|
+|  |      PPO Agent          |  |     |  |     Visualization       ||
+|  +-------------------------+  |     |  +-------------------------+|
++-------------------------------+     +-----------------------------+
 ```
 
-## 🧪 Hasil Pengujian
+## Test Results
 
-Pengujian komprehensif telah dilakukan pada semua komponen sistem:
+Comprehensive testing has been performed on all system components:
 
 ### RiskManager Performance
 
 <div align="center">
   <img src="results/multi_asset_portfolio_test.png" alt="Risk Management" width="600">
-  <p><em>Kinerja portofolio dengan manajemen risiko adaptif menunjukkan return positif dan drawdown minimal</em></p>
+  <p><em>Portfolio performance with adaptive risk management shows positive returns and minimal drawdown</em></p>
 </div>
 
-Pengujian menunjukkan bahwa RiskManager bekerja dengan baik dalam:
-- Menyesuaikan ukuran posisi berdasarkan volatilitas (0.2 pada volatilitas rendah vs 0.025 pada volatilitas tinggi)
-- Menghasilkan sinyal stop loss dan trailing stop yang tepat waktu
-- Membatasi drawdown maksimum portofolio
+Testing shows that RiskManager works well in:
+- Adjusting position size based on volatility (0.2 at low volatility vs 0.025 at high volatility)
+- Generating timely stop loss and trailing stop signals
+- Limiting maximum portfolio drawdown
 
-### Perbandingan Strategi Trading
+### Trading Strategy Comparison
 
 <div align="center">
   <img src="results/backtest_strategies_comparison.png" alt="Strategy Comparison" width="600">
-  <p><em>Perbandingan kinerja berbagai strategi trading pada berbagai kondisi pasar</em></p>
+  <p><em>Performance comparison of various trading strategies across different market conditions</em></p>
 </div>
 
-Hasil menunjukkan bahwa:
-- Strategi Predictive menghasilkan win rate tertinggi (44.12%)
-- Strategi Trend Following lebih aktif dengan jumlah trades terbanyak (127)
-- Strategi Mean Reversion efektif pada periode pasar sideways
+Results show that:
+- Predictive strategy yields the highest win rate (44.12%)
+- Trend Following strategy is more active with the most trades (127)
+- Mean Reversion strategy is effective during sideways market periods
 
 ### PPO Agent Performance
 
 <div align="center">
   <img src="results/ppo_agent_technical.png" alt="PPO Agent" width="600">
-  <p><em>Kinerja PPO Agent dengan indikator teknikal - Return 4.44%, Sharpe Ratio 0.53</em></p>
+  <p><em>PPO Agent performance with technical indicators - Return 4.44%, Sharpe Ratio 0.53</em></p>
 </div>
 
-PPO Agent menunjukkan:
-- Kemampuan adaptasi pada berbagai kondisi pasar
-- Return positif 4.44% dengan Sharpe Ratio 0.53
-- Keputusan trading yang optimal berdasarkan state yang kaya dengan indikator teknikal
+PPO Agent demonstrates:
+- Adaptability to various market conditions
+- Positive return of 4.44% with Sharpe Ratio of 0.53
+- Optimal trading decisions based on rich state with technical indicators
 
-Untuk melihat dokumentasi pengujian lebih lengkap, silakan lihat [TESTING_GUIDE.md](TESTING_GUIDE.md) dan [BUGFIX_REPORT.md](BUGFIX_REPORT.md).
+For more complete testing documentation, please see [TESTING_GUIDE.md](TESTING_GUIDE.md) and [BUGFIX_REPORT.md](BUGFIX_REPORT.md).
 
-## 🛠️ Komponen Utama
+## Main Components
 
 ### 1. RiskManager 
 
 ```python
 from src.trading.risk_manager import RiskManager
 
-# Contoh penggunaan
+# Usage example
 risk_manager = RiskManager(
-    max_drawdown=0.1,        # Maksimum drawdown yang diizinkan (10%)
-    max_position_size=0.2,   # Ukuran posisi maksimum (20% dari portofolio)
-    stop_loss=0.05,          # Stop loss default (5%)
+    max_drawdown=0.1,        # Maximum allowed drawdown (10%)
+    max_position_size=0.2,   # Maximum position size (20% of portfolio)
+    stop_loss=0.05,          # Default stop loss (5%)
     trailing_stop=0.03       # Trailing stop (3%)
 )
 
-# Menentukan ukuran posisi berdasarkan volatilitas
+# Determine position size based on volatility
 position_size = risk_manager.size_position(
-    action='BUY',           # BUY atau SHORT
-    price=150.25,           # Harga aset
-    available_capital=10000, # Modal tersedia
-    volatility=0.02         # Volatilitas historis
+    action='BUY',           # BUY or SHORT
+    price=150.25,           # Asset price
+    available_capital=10000, # Available capital
+    volatility=0.02         # Historical volatility
 )
 ```
 
@@ -460,26 +460,26 @@ position_size = risk_manager.size_position(
 ```python
 from src.trading.portfolio import MultiAssetPortfolio
 
-# Inisialisasi portofolio
+# Initialize portfolio
 portfolio = MultiAssetPortfolio(
-    assets=['AAPL', 'MSFT', 'GOOGL'],  # Daftar aset dalam portofolio
-    initial_capital=100000,            # Modal awal
-    transaction_fee=0.001              # Biaya transaksi (0.1%)
+    assets=['AAPL', 'MSFT', 'GOOGL'],  # List of assets in portfolio
+    initial_capital=100000,            # Initial capital
+    transaction_fee=0.001              # Transaction fee (0.1%)
 )
 
-# Contoh sinyal trading
+# Example trading signals
 signals = [
     {'symbol': 'AAPL', 'action': 'BUY', 'size': 0.15, 'volatility': 0.01},
     {'symbol': 'MSFT', 'action': 'SHORT', 'size': 0.1, 'volatility': 0.015}
 ]
 
-# Harga saat ini
+# Current prices
 current_prices = {'AAPL': 150.25, 'MSFT': 270.50, 'GOOGL': 2500.75}
 
-# Eksekusi alokasi modal
+# Execute capital allocation
 result = portfolio.allocate_capital(signals, current_prices, timestamp=datetime.now())
 
-# Mendapatkan metrik portofolio
+# Get portfolio metrics
 summary = portfolio.get_portfolio_summary()
 positions = portfolio.get_positions_df()
 transactions = portfolio.get_transactions_df()
@@ -491,23 +491,23 @@ history = portfolio.get_portfolio_history_df()
 ```python
 from src.trading.backtest import Backtester
 
-# Inisialisasi backtester
+# Initialize backtester
 backtester = Backtester(
-    actual_prices=prices,             # Array harga aktual
-    predicted_prices=predictions,     # Array harga prediksi
-    initial_investment=10000,         # Investasi awal
-    transaction_fee=0.001,            # Biaya transaksi
-    dates=dates                       # Array tanggal (opsional)
+    actual_prices=prices,             # Array of actual prices
+    predicted_prices=predictions,     # Array of predicted prices
+    initial_investment=10000,         # Initial investment
+    transaction_fee=0.001,            # Transaction fee
+    dates=dates                       # Array of dates (optional)
 )
 
-# Jalankan backtest
+# Run backtest
 portfolio_values, trades, performance = backtester.run(
-    strategy="Trend Following",       # Strategi trading
-    allow_short=True,                 # Izinkan short selling
-    max_position_size=0.5             # Ukuran posisi maksimum
+    strategy="Trend Following",       # Trading strategy
+    allow_short=True,                 # Allow short selling
+    max_position_size=0.5             # Maximum position size
 )
 
-# Visualisasi hasil
+# Visualize results
 backtester.plot_results(benchmark=benchmark_prices)
 ```
 
@@ -516,58 +516,58 @@ backtester.plot_results(benchmark=benchmark_prices)
 ```python
 from src.trading.ppo_agent import PPOTrader
 
-# Inisialisasi PPO Trader
+# Initialize PPO Trader
 ppo_trader = PPOTrader(
-    prices=prices,                   # Array harga historis
-    features=features,               # Array fitur/indikator teknikal
-    initial_investment=10000         # Investasi awal
+    prices=prices,                   # Array of historical prices
+    features=features,               # Array of features/technical indicators
+    initial_investment=10000         # Initial investment
 )
 
-# Latih model
+# Train model
 train_results = ppo_trader.train(
-    episodes=100,                    # Jumlah episode training
-    max_steps=None                   # Batas langkah per episode
+    episodes=100,                    # Number of training episodes
+    max_steps=None                   # Step limit per episode
 )
 
-# Jalankan backtest
+# Run backtest
 backtest_results = ppo_trader.backtest()
 
-# Akses hasil
+# Access results
 portfolio_values = backtest_results['portfolio_values']
 trades = backtest_results['trades']
 performance = backtest_results['performance']
 actions = backtest_results['actions']  # 0=hold, 1=buy, 2=sell
 ```
 
-## 📈 Contoh Kasus Penggunaan
+## Use Case Examples
 
-### Forex Trading (USD/IDR)
+### Forex Trading (EUR/USD)
 
 ```python
 from src.trading import Backtester, TradingStrategy
 import yfinance as yf
 import matplotlib.pyplot as plt
 
-# Download data USD/IDR
-data = yf.download('IDR=X', period='1y')
+# Download EUR/USD data
+data = yf.download('EURUSD=X', period='1y')
 prices = data['Close'].values
 dates = data.index.tolist()
 
-# Buat prediksi sederhana (contoh: lag 1-day sebagai prediksi)
+# Create simple prediction (example: lag 1-day as prediction)
 predicted_prices = prices.copy()
 predicted_prices = np.roll(predicted_prices, -1)
-predicted_prices[-1] = predicted_prices[-2]  # Fix nilai terakhir
+predicted_prices[-1] = predicted_prices[-2]  # Fix last value
 
-# Jalankan backtest
+# Run backtest
 backtester = Backtester(
     actual_prices=prices,
     predicted_prices=predicted_prices,
-    initial_investment=100000000,  # 100 juta Rupiah
-    transaction_fee=0.0005,        # 0.05% fee
+    initial_investment=100000,  # $100,000
+    transaction_fee=0.0005,     # 0.05% fee
     dates=dates
 )
 
-# Ujicoba berbagai strategi
+# Test various strategies
 strategies = ["Trend Following", "Mean Reversion", "Predictive"]
 results = {}
 
@@ -579,70 +579,69 @@ for strategy in strategies:
     )
     results[strategy] = (portfolio_values, performance)
     
-    print(f"\nStrategi: {strategy}")
+    print(f"\nStrategy: {strategy}")
     print(f"Return: {performance['total_return']:.2f}%")
     print(f"Sharpe Ratio: {performance['sharpe_ratio']:.4f}")
     print(f"Win Rate: {performance['win_rate']:.2f}%")
     print(f"Trades: {performance['num_trades']}")
 
-# Visualisasi perbandingan
+# Visualize comparison
 plt.figure(figsize=(12, 6))
 for strategy, (values, _) in results.items():
     plt.plot(dates[-len(values):], values, label=strategy)
 
-plt.title('Perbandingan Strategi Trading USD/IDR')
-plt.xlabel('Tanggal')
-plt.ylabel('Nilai Portofolio (IDR)')
+plt.title('Trading Strategy Comparison EUR/USD')
+plt.xlabel('Date')
+plt.ylabel('Portfolio Value (USD)')
 plt.legend()
 plt.grid(True)
 plt.show()
 ```
 
-## 🔄 Future Work
+## Future Work
 
-Beberapa pengembangan yang direncanakan untuk versi selanjutnya:
+Some developments planned for the next version:
 
-1. **Integrasi API Trading**
-   - Koneksi langsung ke broker (Interactive Brokers, Alpaca, Binance)
-   - Eksekusi order otomatis berbasis sinyal
+1. **Trading API Integration**
+   - Direct connection to brokers (Interactive Brokers, Alpaca, Binance)
+   - Automatic order execution based on signals
 
-2. **Peningkatan Machine Learning**
-   - Implementasi Deep Reinforcement Learning yang lebih canggih
-   - Transfer learning untuk adaptasi pasar antar aset
+2. **Machine Learning Improvements**
+   - Implementation of more advanced Deep Reinforcement Learning
+   - Transfer learning for cross-asset market adaptation
 
-3. **Pengayaan Data**
-   - Integrasi analisis sentimen dari berita dan media sosial
-   - Data fundamental untuk strategi mixed fundamental-technical
+3. **Data Enrichment**
+   - Sentiment analysis integration from news and social media
+   - Fundamental data for mixed fundamental-technical strategies
 
-4. **Optimasi Parameter**
-   - Implementasi Bayesian Optimization untuk hyperparameter tuning
-   - Walk-forward optimization untuk validasi yang lebih kokoh
+4. **Parameter Optimization**
+   - Implementation of Bayesian Optimization for hyperparameter tuning
+   - Walk-forward optimization for more robust validation
 
-5. **Pengembangan UI**
-   - Dashboard real-time untuk monitoring portofolio
-   - Mobile app untuk pemantauan dan pemberitahuan
+5. **UI Development**
+   - Real-time dashboard for portfolio monitoring
+   - Mobile app for monitoring and notifications
 
-## 📝 Lisensi
+## License
 
 [MIT](LICENSE)
 
-## 🤝 Kontributor
+## Contributors
 
-Kontribusi selalu disambut! Silakan:
-- Buka issue untuk melaporkan bug atau mengusulkan fitur
-- Submit pull request untuk perbaikan atau penambahan fitur
-- Bagikan hasil pengujian pada berbagai aset dan kondisi pasar
+Contributions are always welcome! Please:
+- Open an issue to report bugs or propose features
+- Submit a pull request for fixes or feature additions
+- Share test results on various assets and market conditions
 
-## 📚 Referensi
+## References
 
 - Chan, E. P. (2013). *Algorithmic Trading: Winning Strategies and Their Rationale*
 - Sutton, R. S., & Barto, A. G. (2018). *Reinforcement Learning: An Introduction*
 - De Prado, M. L. (2018). *Advances in Financial Machine Learning*
-- *Technical Analysis of the Financial Markets* oleh John J. Murphy
+- Murphy, J. J. *Technical Analysis of the Financial Markets*
 
 ---
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/N4N51EF9I0)
 <div align="center">
-  <p><strong>AI Hedge Fund</strong> - Trading Algoritmik Cerdas untuk Era Digital</p>
+  <p><strong>AI Hedge Fund</strong> - Intelligent Algorithmic Trading for the Digital Era</p>
 </div> 
-
