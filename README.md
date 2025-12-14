@@ -1,9 +1,11 @@
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/N4N51EF9I0)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![TensorFlow](https://img.shields.io/badge/TensorFlow-%23FF6F00.svg?style=for-the-badge&logo=TensorFlow&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?style=for-the-badge&logo=python&logoColor=white)
+
 # 🤖💹 AI Hedge Fund
 
-Sistem kecerdasan buatan untuk manajemen portofolio dan perdagangan otomatis berbasis machine learning dengan kemampuan adaptasi tinggi pada berbagai kondisi pasar.
+Sistem kecerdasan buatan untuk manajemen portofolio dan perdagangan otomatis berbasis **PyTorch** dengan kemampuan adaptasi tinggi pada berbagai kondisi pasar.
 
 <div align="center">
   <img src="results/integrated_system_test.png" alt="AI Hedge Fund Performance" width="800">
@@ -50,9 +52,14 @@ Sistem ini merupakan evolusi dari model prediksi harga saham sederhana, yang kin
 
 ### 6. Model PatchTST (PyTorch)
 - **PatchTST**: Model transformer berbasis patch untuk time series forecasting, sangat efektif untuk data finansial dan prediksi harga saham.
-- **Keunggulan**: Lebih efisien dan akurat pada data time series panjang, mendukung hyperparameter tuning grid search secara fleksibel di GUI.
-- **Tuning**: Untuk tuning grid search custom (patch_len, stride, d_model, n_heads, n_layers, dropout, lr, max_trials), gunakan GUI. CLI hanya mendukung grid default.
+- **Keunggulan**: Lebih efisien dan akurat pada data time series panjang, mendukung hyperparameter tuning dengan Optuna.
+- **Tuning**: Mendukung Bayesian optimization dan grid search untuk hyperparameter tuning.
 - **Dokumentasi kode**: [src/models/patchtst_model.py](src/models/patchtst_model.py)
+
+### 7. CLI dengan Tampilan Interaktif 🆕
+- **Rich Terminal UI**: Tampilan CLI cantik dengan progress bar, spinner, dan tabel berwarna
+- **Animasi Loading**: Progress bar real-time saat training dan prediksi
+- **PPO Trading Signals**: Sinyal trading otomatis dengan tingkat kepercayaan
 
 ## 💻 Penggunaan Mendetail
 
@@ -90,40 +97,70 @@ Melalui GUI, Anda dapat:
 
 ### Menjalankan Aplikasi Command-Line
 
-Untuk penggunaan otomatis atau scripting:
+CLI dengan tampilan interaktif dan progress bar:
 
 ```bash
-# Prediksi harga saham dengan PatchTST (PyTorch, tanpa Lightning)
-python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 2023-12-31 --model patchtst --lookback 60 --forecast_days 20 --tune --save
+# Prediksi harga saham (default: 6 tahun data)
+python scripts/run_cli.py --ticker BBCA.JK --mode predict --forecast-days 20
 
-# Prediksi + backtest dengan PPO
-python scripts/run_cli.py --ticker BMRI.JK --start_date 2015-01-01 --end_date 2023-12-31 --model patchtst --lookback 60 --forecast_days 20 --tune --save --backtest --strategy PPO
+# Prediksi dengan hyperparameter tuning
+python scripts/run_cli.py --ticker BMRI.JK --mode predict --tune --forecast-days 20 --save-results
+
+# Prediksi dengan PPO trading signals
+python scripts/run_cli.py --ticker BBCA.JK --mode predict --ppo --forecast-days 10
+
+# Backtest dengan strategi
+python scripts/run_cli.py --ticker BBCA.JK --mode backtest --strategy Predictive
+
+# Prediksi dengan periode custom
+python scripts/run_cli.py --ticker AAPL --mode predict --start-date 2020-01-01 --end-date 2024-12-31
+```
+
+#### Contoh Output CLI:
+
+```
+╔════════════════════════════════════════════════════════════╗
+║  🚀 APLIKASI PREDIKSI HARGA SAHAM                          ║
+║  📊 PatchTST Deep Learning | 🤖 PPO Trading | ⚡ CUDA      ║
+╚════════════════════════════════════════════════════════════╝
+
+  ✅ Data siap!             ━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  ✅ Model terlatih (27.1s) ━━━━━━━━━━━━━━━━━ 100% 0:00:27
+  ✅ Prediksi selesai!      ━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  ✅ Evaluasi selesai!      ━━━━━━━━━━━━━━━━━ 100% 0:00:00
+
+  🔮 Prediksi untuk Hari-hari Berikutnya
+  ╭──────┬─────────────┬──────────╮
+  │ Hari │       Harga │   Tren   │
+  ├──────┼─────────────┼──────────┤
+  │  1   │ Rp 9,289.25 │          │
+  │  2   │ Rp 9,328.11 │ ↗️ +0.42% │
+  │  3   │ Rp 9,308.85 │ ↘️ -0.21% │
+  ╰──────┴─────────────┴──────────╯
+
+  ╭──────────────────────────────────────╮
+  │  ✨ SELESAI ✨                        │
+  │  Terima kasih telah menggunakan!    │
+  ╰──────────────────────────────────────╯
 ```
 
 ### Parameter CLI
 
-| Argumen        | Keterangan                            | Contoh             |
-|----------------|----------------------------------------|--------------------|
-| `--ticker`     | Simbol saham/komoditas                 | `AAPL`, `ADRO.JK`  |
-| `--start_date` | Tanggal awal data historis (YYYY-MM-DD)| `2020-01-01`       |
-| `--end_date`   | Tanggal akhir data historis            | `2024-12-31`       |
-| `--model`      | Jenis model yang digunakan             | `cnn_lstm`, `bilstm`, `transformer`, `ensemble`, `patchtst` |
-| `--lookback`   | Jumlah hari historis untuk input model | `60`               |
-| `--forecast_days`| Jumlah hari ke depan untuk prediksi   | `20`               |
-| `--tune`       | Aktifkan hyperparameter tuning         | (flag, tanpa nilai) |
-| `--save`       | Simpan hasil ke file                   | (flag, tanpa nilai) |
-| `--backtest`   | Jalankan backtest                      | (flag, tanpa nilai) |
-| `--strategy`   | Pilih strategi trading                 | `Trend Following`, `Mean Reversion`, `Predictive`, `PPO` |
-| `--optimize`   | Optimasi parameter strategi            | (flag, tanpa nilai) |
-
----
-Parameter yang tersedia:
-- `--ticker`: Kode saham atau aset (contoh: AAPL, MSFT, BTC-USD)
-- `--days`: Jumlah hari data historis (default: 365)
-- `--strategy`: Strategi trading ("Trend Following", "Mean Reversion", "Predictive")
-- `--allow-short`: Mengaktifkan short selling (True/False)
-- `--risk-level`: Level risiko (1-5, dimana 1 paling konservatif)
-- `--output`: Format output (json, csv, txt)
+| Argumen           | Keterangan                              | Contoh                    |
+|-------------------|-----------------------------------------|---------------------------|
+| `--ticker`        | Simbol saham/komoditas                  | `AAPL`, `BBCA.JK`         |
+| `--mode`          | Mode operasi                            | `predict`, `backtest`     |
+| `--start-date`    | Tanggal awal data (YYYY-MM-DD)          | `2020-01-01`              |
+| `--end-date`      | Tanggal akhir data                      | `2024-12-31`              |
+| `--model`         | Jenis model (hanya `patchtst`)          | `patchtst`                |
+| `--lookback`      | Jumlah hari historis untuk input        | `60`                      |
+| `--forecast-days` | Jumlah hari ke depan untuk prediksi     | `20`                      |
+| `--tune`          | Aktifkan hyperparameter tuning          | (flag)                    |
+| `--ppo`           | Aktifkan PPO trading signals            | (flag)                    |
+| `--save-results`  | Simpan hasil ke file                    | (flag)                    |
+| `--strategy`      | Pilih strategi (untuk backtest)         | `Trend Following`, `PPO`  |
+| `--initial-balance`| Modal awal untuk backtest              | `10000000`                |
+| `--optimize`      | Optimasi parameter strategi             | (flag)                    |
 
 
 #### 1. Backtesting Strategi Tunggal

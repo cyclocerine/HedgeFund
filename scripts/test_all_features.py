@@ -797,7 +797,7 @@ def main():
     
     all_success = True
     for name, result in results.items():
-        status = "✅" if result == "SUKSES" else "❌"
+        status = "[OK]" if result == "SUKSES" else "[FAIL]"
         print(f"{status} {name}: {result}")
         if result != "SUKSES":
             all_success = False

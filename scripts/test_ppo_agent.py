@@ -95,8 +95,8 @@ if __name__ == "__main__":
     try:
         test_trading_env()
         test_ppo_agent_backtest()
-        print("\n✅ All PPO tests completed successfully!")
+        print("\n[OK] All PPO tests completed successfully!")
     except Exception as e:
-        print(f"\n❌ Error during PPO tests: {str(e)}")
+        print(f"\n[ERROR] Error during PPO tests: {str(e)}")
         import traceback
         traceback.print_exc() 
