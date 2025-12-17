@@ -215,8 +215,8 @@ if __name__ == "__main__":
         test_risk_manager()
         test_portfolio()
         test_backtester()
-        print("\n✅ All tests completed successfully!")
+        print("\n[OK] All tests completed successfully!")
     except Exception as e:
-        print(f"\n❌ Error during tests: {str(e)}")
+        print(f"\n[ERROR] Error during tests: {str(e)}")
         import traceback
         traceback.print_exc() 

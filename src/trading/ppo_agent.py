@@ -1,88 +1,63 @@
 """
-PPO Agent Module
-=============
+PPO Agent Module - PyTorch Version
+===================================
 
-Modul ini berisi implementasi PPO (Proximal Policy Optimization) agent
-untuk optimasi strategi trading menggunakan reinforcement learning.
+Implementasi PPO (Proximal Policy Optimization) menggunakan PyTorch untuk trading.
+Fitur: Entropy bonus, GAE, gradient clipping, LR scheduling, value clipping.
 """
 
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate
-from tensorflow.keras.optimizers import Adam
-import tensorflow.keras.backend as K
-import gym
-from gym import spaces
-from torch.utils.tensorboard import SummaryWriter
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.distributions import Categorical
+import gymnasium as gym
+from gymnasium import spaces
+
 
 class Buffer:
-    """
-    Buffer untuk menyimpan experience untuk agen PPO
-    """
+    """Buffer untuk menyimpan experience untuk PPO agent."""
     def __init__(self):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.log_probs = []
-        self.dones = []
-        
+        self.clear()
+
     def clear(self):
-        """Bersihkan buffer"""
         self.states = []
         self.actions = []
         self.rewards = []
         self.values = []
         self.log_probs = []
         self.dones = []
+
+    def __len__(self):
+        return len(self.states)
+
 
 class TradingEnv(gym.Env):
     """
-    Trading environment yang kompatibel dengan gym untuk reinforcement learning
+    Trading environment yang kompatibel dengan gym untuk reinforcement learning.
     """
     def __init__(self, prices, features=None, initial_balance=10000, transaction_fee=0.001):
-        """
-        Inisialisasi trading environment
-        
-        Parameters:
-        -----------
-        prices : array-like
-            Data harga historis
-        features : array-like, optional
-            Fitur tambahan untuk model (prediksi, indikator teknikal, dll)
-        initial_balance : float, optional
-            Saldo awal yang tersedia, default 10000
-        transaction_fee : float, optional
-            Biaya transaksi sebagai fraksi dari nilai transaksi, default 0.001 (0.1%)
-        """
         super(TradingEnv, self).__init__()
-        
-        self.prices = prices
+
+        self.prices = np.array(prices).flatten()
         self.features = features if features is not None else np.zeros((len(prices), 1))
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
-        
-        # State shape: [balance, owned_shares, current_price, position_value, unrealized_pnl, *features, *technical_indicators]
+
+        # State shape
         self.observation_space = spaces.Box(
-            low=-np.inf, 
-            high=np.inf, 
-            shape=(8 + self.features.shape[1],)  # 8 state variables + features
+            low=-np.inf,
+            high=np.inf,
+            shape=(8 + self.features.shape[1],),
+            dtype=np.float32
         )
-        
+
         # Actions: 0 = hold, 1 = buy, 2 = sell
         self.action_space = spaces.Discrete(3)
-        
-        # Informasi tambahan untuk trading
-        self.avg_entry_price = 0  # Harga rata-rata masuk
-        self.position_value = 0   # Nilai posisi saat ini
-        self.unrealized_pnl = 0   # P&L yang belum direalisasi
-        
-        # Reset environment
+
         self.reset()
-        
+
     def reset(self):
-        """Reset environment ke keadaan awal"""
         self.balance = self.initial_balance
         self.shares = 0
         self.current_step = 0
@@ -91,87 +66,78 @@ class TradingEnv(gym.Env):
         self.avg_entry_price = 0
         self.position_value = 0
         self.unrealized_pnl = 0
-        
+
         return self._get_observation()
-        
+
     def step(self, action):
-        """
-        Melakukan langkah berdasarkan aksi yang diberikan
-        
-        Parameters:
-        -----------
-        action : int
-            0 = hold, 1 = buy, 2 = sell
-            
-        Returns:
-        --------
-        tuple
-            (observation, reward, done, info)
-        """
         if self.done:
             return self._get_observation(), 0, self.done, {}
-            
+
         current_price = self.prices[self.current_step]
         prev_portfolio_value = self.balance + self.shares * current_price
-        
-        # Menjalankan aksi
+
+        # Execute action
         if action == 1:  # Buy
-            max_shares = self.balance / (current_price * (1 + self.transaction_fee))
-            new_shares = max_shares
-            cost = new_shares * current_price * (1 + self.transaction_fee)
-            if cost > 0:
-                # Update harga rata-rata masuk jika sudah memiliki saham
+            if self.balance > 0:
+                max_shares = self.balance / (current_price * (1 + self.transaction_fee))
+                new_shares = max_shares
+                cost = new_shares * current_price * (1 + self.transaction_fee)
+
                 if self.shares > 0:
                     self.avg_entry_price = (self.shares * self.avg_entry_price + new_shares * current_price) / (self.shares + new_shares)
                 else:
                     self.avg_entry_price = current_price
-                
+
                 self.shares += new_shares
                 self.balance -= cost
+
         elif action == 2:  # Sell
             if self.shares > 0:
                 sell_value = self.shares * current_price * (1 - self.transaction_fee)
                 self.balance += sell_value
                 self.shares = 0
                 self.avg_entry_price = 0
-        
-        # Pindah ke langkah berikutnya
+
+        # Move to next step
         self.current_step += 1
-        
-        # Cek apakah episode selesai
+
         if self.current_step >= len(self.prices) - 1:
             self.done = True
-            
-        # Hitung nilai portfolio baru
+
+        # Calculate new portfolio value
         new_price = self.prices[self.current_step]
         self.position_value = self.shares * new_price
         new_portfolio_value = self.balance + self.position_value
-        
+
         # Update unrealized P&L
         if self.shares > 0 and self.avg_entry_price > 0:
             self.unrealized_pnl = (new_price - self.avg_entry_price) * self.shares
         else:
             self.unrealized_pnl = 0
-            
+
         self.portfolio_value_history.append(new_portfolio_value)
-        
-        # Hitung reward (return dari langkah sebelumnya)
-        reward = (new_portfolio_value - prev_portfolio_value) / prev_portfolio_value
-        
+
+        # Calculate reward
+        portfolio_return = (new_portfolio_value - prev_portfolio_value) / prev_portfolio_value
+
         # Drawdown penalty
         max_portfolio = max(self.portfolio_value_history)
         drawdown = (max_portfolio - new_portfolio_value) / max_portfolio if max_portfolio > 0 else 0
-        reward -= 0.1 * drawdown  # Penalty drawdown
-        # Transaction cost penalty (implicit in balance update, but can be made explicit)
-        # --- END ADVANCED REWARD SHAPING ---
-        # Tambahkan bonus reward untuk nilai akhir portfolio yang lebih tinggi
+        
+        reward = portfolio_return - 0.1 * drawdown
+
+        # Transaction cost penalty
+        if action != 0:
+            reward -= 0.001
+
+        # End episode bonus
         if self.done:
             final_return = (new_portfolio_value - self.initial_balance) / self.initial_balance
-            # Sharpe Ratio episode
-            returns = np.diff(self.portfolio_value_history) / np.array(self.portfolio_value_history[:-1])
-            sharpe = np.mean(returns) / (np.std(returns) + 1e-8) * np.sqrt(252) if len(returns) > 1 else 0
-            reward += final_return + 0.2 * sharpe
-        
+            if len(self.portfolio_value_history) > 1:
+                returns = np.diff(self.portfolio_value_history) / np.array(self.portfolio_value_history[:-1])
+                sharpe = np.mean(returns) / (np.std(returns) + 1e-8) * np.sqrt(252)
+                reward += final_return + 0.2 * max(sharpe, 0)
+
         return self._get_observation(), reward, self.done, {
             'portfolio_value': new_portfolio_value,
             'balance': self.balance,
@@ -179,544 +145,394 @@ class TradingEnv(gym.Env):
             'unrealized_pnl': self.unrealized_pnl,
             'position_value': self.position_value
         }
-        
+
     def _get_observation(self):
-        """
-        Dapatkan observasi untuk kondisi saat ini dengan fitur yang diperkaya
-        """
         current_price = self.prices[self.current_step]
-        
-        # Indikator teknikal
+
+        # Technical indicators
         if self.current_step >= 20:
-            # SMA (Simple Moving Average)
             sma_short = np.mean(self.prices[self.current_step-5:self.current_step+1])
             sma_long = np.mean(self.prices[self.current_step-20:self.current_step+1])
-            
-            # Rasio harga saat ini terhadap SMA (relatif ke 1)
             price_sma_ratio_short = current_price / sma_short - 1
             price_sma_ratio_long = current_price / sma_long - 1
-            
-            # Volatilitas (diukur sebagai standar deviasi return dalam 20 hari)
-            # Perbaikan - gunakan window lokal untuk memastikan dimensi array yang dibagi sesuai
+
             price_window = self.prices[self.current_step-20:self.current_step+1]
             returns = np.diff(price_window) / price_window[:-1]
             volatility = np.std(returns)
-            
-            # Momentum (perubahan harga dalam periode tertentu)
-            momentum_5d = self.prices[self.current_step] / self.prices[self.current_step-5] - 1 if self.current_step >= 5 else 0
         else:
-            # Default nilai untuk awal episode
-            sma_short = sma_long = current_price
-            price_sma_ratio_short = price_sma_ratio_long = 0
-            volatility = 0.02  # Default volatilitas
-            momentum_5d = 0
-            
-        # Informasi portofolio
-        portfolio_value = self.balance + self.position_value
-        position_ratio = self.position_value / portfolio_value if portfolio_value > 0 else 0
-        
-        # Ambil features dari timestep saat ini
+            price_sma_ratio_short = 0
+            price_sma_ratio_long = 0
+            volatility = 0.02
+
+        # Get features
         try:
             current_features = self.features[self.current_step]
-        except (IndexError, TypeError) as e:
-            print(f"Warning: Tidak bisa mengambil features: {e}")
+            if not isinstance(current_features, np.ndarray):
+                current_features = np.array(current_features, dtype=np.float32)
+            current_features = current_features.flatten().astype(np.float32)
+        except (IndexError, TypeError):
             current_features = np.zeros(self.features.shape[1], dtype=np.float32)
-        
-        # Pastikan current_features adalah numpy array 1D
-        if not isinstance(current_features, np.ndarray):
-            current_features = np.array(current_features, dtype=np.float32)
-        if len(current_features.shape) > 1:
-            current_features = current_features.flatten()
-        current_features = current_features.astype(np.float32)
-        
-        # State dasar dengan fitur diperkaya
+
         base_info = np.array([
             self.balance / self.initial_balance,
             self.shares * current_price / self.initial_balance,
-            current_price,
+            current_price / self.prices[0],
             self.position_value / self.initial_balance,
             self.unrealized_pnl / self.initial_balance,
             price_sma_ratio_short,
             price_sma_ratio_long,
-            volatility
+            volatility * 10
         ], dtype=np.float32)
+
+        return np.concatenate([base_info, current_features])
+
+
+class ActorCritic(nn.Module):
+    """
+    Actor-Critic network untuk PPO menggunakan PyTorch.
+    """
+    def __init__(self, state_dim, action_dim, hidden_dim=256):
+        super(ActorCritic, self).__init__()
         
-        try:
-            obs = np.concatenate([base_info, current_features])
-        except Exception as e:
-            print(f"Warning: Tidak bisa menggabungkan arrays: {e}, base_info.shape={base_info.shape}, features.shape={current_features.shape}")
-            obs = base_info
+        # Shared layers
+        self.shared = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU()
+        )
         
-        if not hasattr(self, 'state_dimensions_calculated') or not self.state_dimensions_calculated:
-            self.state_dim = len(obs)
-            self.state_dimensions_calculated = True
+        # Actor head
+        self.actor = nn.Sequential(
+            nn.Linear(hidden_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, action_dim),
+            nn.Softmax(dim=-1)
+        )
         
-        return obs
+        # Critic head
+        self.critic = nn.Sequential(
+            nn.Linear(hidden_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
         
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, state):
+        shared_out = self.shared(state)
+        action_probs = self.actor(shared_out)
+        value = self.critic(shared_out)
+        return action_probs, value
+    
+    def get_action(self, state):
+        action_probs, value = self.forward(state)
+        dist = Categorical(action_probs)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action, log_prob, value.squeeze(-1)
+    
+    def evaluate(self, states, actions):
+        action_probs, values = self.forward(states)
+        dist = Categorical(action_probs)
+        log_probs = dist.log_prob(actions)
+        entropy = dist.entropy()
+        return log_probs, values.squeeze(-1), entropy
+
+
 class PPOAgent:
     """
-    Agent yang mengimplementasikan algoritma PPO untuk trading
+    PPO Agent menggunakan PyTorch dengan entropy bonus dan gradient clipping.
     """
     def __init__(
-        self, 
-        state_dim, 
+        self,
+        state_dim,
         action_dim,
-        actor_lr=0.0003,
-        critic_lr=0.001,
+        lr=3e-4,
         gamma=0.99,
         clip_ratio=0.2,
         batch_size=64,
         epochs=10,
         lam=0.95,
-        use_lstm=False
+        entropy_coef=0.01,
+        value_coef=0.5,
+        max_grad_norm=0.5,
+        device=None
     ):
-        """
-        Inisialisasi PPO Agent
-        
-        Parameters:
-        -----------
-        state_dim : int
-            Dimensi dari state space
-        action_dim : int
-            Dimensi dari action space
-        actor_lr : float, optional
-            Learning rate untuk actor network
-        critic_lr : float, optional
-            Learning rate untuk critic network
-        gamma : float, optional
-            Discount factor untuk reward
-        clip_ratio : float, optional
-            Batasan perubahan policy dalam PPO
-        batch_size : int, optional
-            Ukuran batch untuk training
-        epochs : int, optional
-            Jumlah epoch training per batch
-        lam : float, optional
-            Parameter lambda untuk Generalized Advantage Estimation (GAE)
-        use_lstm : bool, optional
-            Gunakan LSTM pada actor dan critic
-        """
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.actor_lr = actor_lr
-        self.critic_lr = critic_lr
         self.gamma = gamma
         self.clip_ratio = clip_ratio
         self.batch_size = batch_size
         self.epochs = epochs
         self.lam = lam
-        self.use_lstm = use_lstm
+        self.entropy_coef = entropy_coef
+        self.value_coef = value_coef
+        self.max_grad_norm = max_grad_norm
         
-        # Build and compile actor-critic model
-        self.actor = self._build_actor()
-        self.critic = self._build_critic()
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Initialize buffer
+        self.network = ActorCritic(state_dim, action_dim).to(self.device)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=lr)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
+        
         self.buffer = Buffer()
-        
-    def _build_actor(self):
-        """Buat actor network"""
-        state_input = Input(shape=(self.state_dim,))
-        x = Dense(64, activation='relu')(state_input)
-        if self.use_lstm:
-            x = tf.expand_dims(x, axis=1)
-            x = LSTM(32, return_sequences=False)(x)
-        x = Dense(64, activation='relu')(x)
-        output = Dense(self.action_dim, activation='softmax')(x)
-        
-        model = Model(inputs=state_input, outputs=output)
-        model.compile(optimizer=Adam(learning_rate=self.actor_lr))
-        return model
-        
-    def _build_critic(self):
-        """Buat critic network"""
-        state_input = Input(shape=(self.state_dim,))
-        x = Dense(64, activation='relu')(state_input)
-        if self.use_lstm:
-            x = tf.expand_dims(x, axis=1)
-            x = LSTM(32, return_sequences=False)(x)
-        x = Dense(64, activation='relu')(x)
-        output = Dense(1, activation='linear')(x)
-        
-        model = Model(inputs=state_input, outputs=output)
-        model.compile(optimizer=Adam(learning_rate=self.critic_lr), loss='mse')
-        return model
-        
+        self.target_kl = 0.015
+
     def get_action(self, state):
-        """
-        Memilih aksi berdasarkan state saat ini
-        
-        Parameters:
-        -----------
-        state : array-like
-            State saat ini
-            
-        Returns:
-        --------
-        tuple
-            (aksi, log probabilitas, nilai state)
-        """
-        # Pastikan state dalam bentuk numpy array
+        """Select action based on current state."""
         if not isinstance(state, np.ndarray):
-            try:
-                state = np.array(state, dtype=np.float32)
-            except Exception as e:
-                print(f"Error converting state to numpy array: {e}")
-                # Jika gagal, gunakan array nol sebagai fallback
-                state = np.zeros(self.state_dim, dtype=np.float32)
-        
-        # Pastikan dimensi state sesuai
-        if len(state.shape) == 0:  # Scalar
-            state = np.array([float(state)], dtype=np.float32)
-        
-        if len(state.shape) == 1:  # Vector 1D
-            # Pastikan panjang state sesuai dengan yang diharapkan
+            state = np.array(state, dtype=np.float32)
+
+        if len(state.shape) == 1:
             if state.shape[0] != self.state_dim:
-                # Jika tidak sesuai, sesuaikan ukurannya
                 if state.shape[0] > self.state_dim:
-                    # Potong jika terlalu panjang
                     state = state[:self.state_dim]
                 else:
-                    # Pad dengan nol jika terlalu pendek
-                    padding = np.zeros(self.state_dim - state.shape[0], dtype=np.float32)
-                    state = np.concatenate([state, padding])
-            
-            # Reshape untuk batch prediction (1, state_dim)
-            state = state.reshape(1, -1)
+                    state = np.pad(state, (0, self.state_dim - state.shape[0]))
+
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
-        # Prediksi action probabilities dan value
-        try:
-            action_probs = self.actor.predict(state, verbose=0)[0]
-            value = self.critic.predict(state, verbose=0)[0][0]
-        except Exception as e:
-            print(f"Error during prediction: {e}")
-            # Jika prediksi gagal, gunakan distribusi uniform dan nilai 0
-            action_probs = np.ones(self.action_dim) / self.action_dim
-            value = 0.0
+        with torch.no_grad():
+            action, log_prob, value = self.network.get_action(state_tensor)
         
-        # Pilih aksi berdasarkan probabilitas
-        try:
-            action = np.random.choice(self.action_dim, p=action_probs)
-            log_prob = np.log(action_probs[action] + 1e-10)  # Hindari log(0)
-        except Exception as e:
-            print(f"Error selecting action: {e}")
-            # Jika pemilihan aksi gagal, pilih aksi acak
-            action = np.random.randint(0, self.action_dim)
-            log_prob = -np.log(self.action_dim)  # Log dari uniform probability
-        
-        return int(action), float(log_prob), float(value)
-        
+        return action.item(), log_prob.item(), value.item()
+
     def store_transition(self, state, action, reward, value, log_prob, done):
-        """
-        Simpan transisi ke buffer
-        
-        Parameters:
-        -----------
-        state : array
-            State saat ini
-        action : int
-            Action yang dilakukan
-        reward : float
-            Reward yang didapat
-        value : float
-            Nilai state saat ini (dari critic)
-        log_prob : float
-            Log probabilitas dari action
-        done : bool
-            Flag jika episode sudah selesai
-        """
+        """Store transition in buffer."""
         self.buffer.states.append(state)
         self.buffer.actions.append(action)
         self.buffer.rewards.append(reward)
         self.buffer.values.append(value)
         self.buffer.log_probs.append(log_prob)
         self.buffer.dones.append(done)
-        
-    def clear_buffer(self):
-        """Bersihkan buffer"""
-        self.buffer.clear()
-        
+
     def calculate_advantages(self):
-        """Menghitung advantage untuk setiap transisi di buffer menggunakan GAE"""
-        returns = np.zeros_like(self.buffer.rewards)
-        advantages = np.zeros_like(self.buffer.rewards)
-        
+        """Calculate advantages using GAE."""
+        rewards = np.array(self.buffer.rewards)
+        values = np.array(self.buffer.values)
+        dones = np.array(self.buffer.dones)
+
+        returns = np.zeros_like(rewards)
+        advantages = np.zeros_like(rewards)
+
         next_value = 0
         next_advantage = 0
-        
-        # Hitung returns dan advantages dari belakang (backward)
-        for t in reversed(range(len(self.buffer.rewards))):
-            # Hitung bootstrapped return
-            returns[t] = self.buffer.rewards[t] + self.gamma * next_value * (1 - self.buffer.dones[t])
-            
-            # Hitung TD error
-            td_error = self.buffer.rewards[t] + self.gamma * next_value * (1 - self.buffer.dones[t]) - self.buffer.values[t]
-            
-            # Generalized Advantage Estimation (GAE)
-            advantages[t] = td_error + self.gamma * self.lam * next_advantage * (1 - self.buffer.dones[t])
-            
-            next_value = self.buffer.values[t]
+
+        for t in reversed(range(len(rewards))):
+            mask = 1 - dones[t]
+            returns[t] = rewards[t] + self.gamma * next_value * mask
+            td_error = rewards[t] + self.gamma * next_value * mask - values[t]
+            advantages[t] = td_error + self.gamma * self.lam * next_advantage * mask
+
+            next_value = values[t]
             next_advantage = advantages[t]
-        
+
         return returns, advantages
+
+    def train(self, batch_size=None):
+        """Train PPO agent."""
+        if len(self.buffer) == 0:
+            return {}
+
+        batch_size = batch_size or self.batch_size
         
-    def train(self, batch_size=64):
-        """
-        Latih PPO agent dengan data dari buffer
-        
-        Parameters:
-        -----------
-        batch_size : int
-            Ukuran batch untuk training
-        """
-        # Konversi buffer ke numpy arrays
-        states = np.array(self.buffer.states, dtype=np.float32)
-        actions = np.array(self.buffer.actions, dtype=np.int32)
-        old_log_probs = np.array(self.buffer.log_probs, dtype=np.float32)
-        
-        # Hitung returns dan advantages
+        states = torch.FloatTensor(np.array(self.buffer.states)).to(self.device)
+        actions = torch.LongTensor(np.array(self.buffer.actions)).to(self.device)
+        old_log_probs = torch.FloatTensor(np.array(self.buffer.log_probs)).to(self.device)
+
         returns, advantages = self.calculate_advantages()
+        returns = torch.FloatTensor(returns).to(self.device)
+        advantages = torch.FloatTensor(advantages).to(self.device)
         
-        # Normalisasi advantages
+        # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
-        # Mini-batch training
-        indices = np.arange(len(states))
-        
-        for _ in range(self.epochs):
-            np.random.shuffle(indices)
-            
+
+        total_actor_loss = 0
+        total_critic_loss = 0
+        total_entropy = 0
+        n_updates = 0
+
+        for epoch in range(self.epochs):
+            indices = torch.randperm(len(states))
+
             for start in range(0, len(indices), batch_size):
-                end = start + batch_size
-                if end > len(indices):
-                    end = len(indices)
-                
+                end = min(start + batch_size, len(indices))
                 batch_indices = indices[start:end]
-                
+
                 batch_states = states[batch_indices]
                 batch_actions = actions[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
                 batch_returns = returns[batch_indices]
                 batch_advantages = advantages[batch_indices]
-                
-                # Latih actor dan critic dengan mini-batch
-                self._update_actor_critic(
-                    batch_states, 
-                    batch_actions, 
-                    batch_old_log_probs, 
-                    batch_returns, 
-                    batch_advantages
-                )
-        
-        # Setelah training selesai, kosongkan buffer
-        self.buffer.clear()
 
-    def _update_actor_critic(self, states, actions, old_log_probs, returns, advantages):
-        """
-        Update parameter actor dan critic dengan backpropagation
-        
-        Parameters:
-        -----------
-        states : numpy.ndarray
-            Batch state observations
-        actions : numpy.ndarray
-            Batch actions yang diambil
-        old_log_probs : numpy.ndarray
-            Log probabilitas dari aksi dengan policy lama
-        returns : numpy.ndarray
-            Expected returns (untuk critic)
-        advantages : numpy.ndarray
-            Advantage estimates (untuk actor)
-        """
-        # Update critic
-        with tf.GradientTape() as tape:
-            values = self.critic(states, training=True)
-            critic_loss = tf.reduce_mean(tf.square(returns - values))
-        
-        # Hitung gradients dan update weights critic
-        critic_grads = tape.gradient(critic_loss, self.critic.trainable_variables)
-        self.critic.optimizer.apply_gradients(zip(critic_grads, self.critic.trainable_variables))
-        
-        # Update actor
-        with tf.GradientTape() as tape:
-            # Prediksi probabilitas aksi
-            action_probs = self.actor(states, training=True)
-            
-            # Ambil probabilitas untuk aksi yang diambil
-            indices = tf.stack([
-                tf.range(tf.shape(actions)[0]), 
-                tf.cast(actions, tf.int32)
-            ], axis=1)
-            
-            action_prob = tf.gather_nd(action_probs, indices)
-            new_log_probs = tf.math.log(action_prob + 1e-10)
-            
-            # Hitung ratio untuk clipped objective
-            ratio = tf.exp(new_log_probs - old_log_probs)
-            
-            # Hitung surrogate losses
-            surrogate1 = ratio * advantages
-            surrogate2 = tf.clip_by_value(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages
-            
-            # PPO loss (negatif karena kita ingin maximize)
-            actor_loss = -tf.reduce_mean(tf.minimum(surrogate1, surrogate2))
-        
-        # Hitung gradients dan update weights actor
-        actor_grads = tape.gradient(actor_loss, self.actor.trainable_variables)
-        self.actor.optimizer.apply_gradients(zip(actor_grads, self.actor.trainable_variables))
+                # Evaluate current policy
+                log_probs, values, entropy = self.network.evaluate(batch_states, batch_actions)
+
+                # PPO clipped objective
+                ratio = torch.exp(log_probs - batch_old_log_probs)
+                clipped_ratio = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio)
+                
+                actor_loss = -torch.min(ratio * batch_advantages, clipped_ratio * batch_advantages).mean()
+                
+                # Critic loss
+                critic_loss = nn.functional.mse_loss(values, batch_returns)
+                
+                # Entropy bonus
+                entropy_loss = -entropy.mean()
+
+                # Total loss
+                loss = actor_loss + self.value_coef * critic_loss + self.entropy_coef * entropy_loss
+
+                # Update
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+                self.optimizer.step()
+
+                total_actor_loss += actor_loss.item()
+                total_critic_loss += critic_loss.item()
+                total_entropy += entropy.mean().item()
+                n_updates += 1
+
+            # KL divergence check
+            with torch.no_grad():
+                new_log_probs, _, _ = self.network.evaluate(states, actions)
+                kl_div = (old_log_probs - new_log_probs).mean().item()
+                
+            if abs(kl_div) > 1.5 * self.target_kl:
+                break
+
+        self.scheduler.step()
+        self.buffer.clear()
         
         return {
-            'actor_loss': actor_loss.numpy(),
-            'critic_loss': critic_loss.numpy()
+            'actor_loss': total_actor_loss / max(n_updates, 1),
+            'critic_loss': total_critic_loss / max(n_updates, 1),
+            'entropy': total_entropy / max(n_updates, 1)
         }
+
 
 class PPOTrader:
     """
-    Wrapper class untuk menerapkan PPO dalam konteks trading
+    Wrapper class untuk menerapkan PPO dalam konteks trading.
     """
     def __init__(self, prices, features=None, initial_investment=10000, log_dir=None):
-        """
-        Inisialisasi PPO Trader
-        
-        Parameters:
-        -----------
-        prices : array-like
-            Data harga historis
-        features : array-like, optional
-            Fitur tambahan (termasuk prediksi model)
-        initial_investment : float, optional
-            Jumlah investasi awal, default 10000
-        log_dir : str, optional
-            Direktori untuk menyimpan log TensorBoard
-        """
-        # Setup environment
+        # Generate basic features jika tidak disediakan
         if features is None:
-            # Jika tidak ada features, gunakan return dan volatilitas sebagai feature dasar
-            returns = np.zeros_like(prices)
-            returns[1:] = (prices[1:] / prices[:-1]) - 1
-            
-            # Volatilitas (standar deviasi return rolling window)
-            volatility = np.zeros_like(prices)
+            prices_arr = np.array(prices).flatten()
+            returns = np.zeros_like(prices_arr)
+            returns[1:] = (prices_arr[1:] / prices_arr[:-1]) - 1
+
+            volatility = np.zeros_like(prices_arr)
             window = 10
             for i in range(window, len(returns)):
                 volatility[i] = np.std(returns[i-window+1:i+1])
-                
+
             features = np.column_stack((returns, volatility))
-            
-        self.env = TradingEnv(prices, features, initial_investment)
-        
-        # Setup agent
+
+        self.prices = np.array(prices).flatten()
+        self.features = features
+        self.initial_investment = initial_investment
+        self.env = TradingEnv(self.prices, features, initial_investment)
+
         state_dim = self.env.observation_space.shape[0]
         action_dim = self.env.action_space.n
-        self.agent = PPOAgent(state_dim, action_dim)
-        
+
+        self.agent = PPOAgent(
+            state_dim, 
+            action_dim,
+            entropy_coef=0.02,
+            epochs=8
+        )
         self.trained = False
-        
         self.log_dir = log_dir
-        self.writer = SummaryWriter(log_dir) if log_dir else None
-        
-    def train(self, episodes=100, max_steps=None):
-        """
-        Melatih agent PPO
-        
-        Parameters:
-        -----------
-        episodes : int, optional
-            Jumlah episode training, default 100
-        max_steps : int, optional
-            Maksimum langkah per episode, default None (gunakan seluruh dataset)
-            
-        Returns:
-        --------
-        dict
-            Dictionary berisi hasil training
-        """
+
+    def train(self, episodes=100, max_steps=None, verbose=True):
+        """Train PPO agent."""
         if max_steps is None:
-            max_steps = len(self.env.prices)
-            
-        best_reward = -np.inf
+            max_steps = len(self.prices) - 1
+
         episode_rewards = []
         portfolio_values = []
-        
+        best_reward = -np.inf
+
         for ep in range(episodes):
             state = self.env.reset()
             total_reward = 0
-            for t in range(max_steps or len(self.env.prices)):
-                action = self.agent.get_action(state)
+            
+            for t in range(max_steps):
+                action, log_prob, value = self.agent.get_action(state)
                 next_state, reward, done, info = self.env.step(action)
-                self.agent.buffer.states.append(state)
-                self.agent.buffer.actions.append(action)
-                self.agent.buffer.rewards.append(reward)
-                self.agent.buffer.dones.append(done)
+
+                self.agent.store_transition(state, action, reward, value, log_prob, done)
+
                 state = next_state
                 total_reward += reward
+
                 if done:
                     break
-            # Logging ke TensorBoard
-            if self.writer:
-                self.writer.add_scalar('Reward/episode', total_reward, ep)
-                self.writer.add_scalar('PortfolioValue/episode', info['portfolio_value'], ep)
-            # Training PPO
-            self.agent.train(self.agent.batch_size)
-        if self.writer:
-            self.writer.close()
-        
+
+            # Train after each episode
+            train_info = self.agent.train()
+
+            episode_rewards.append(total_reward)
+            final_value = info.get('portfolio_value', self.initial_investment)
+            portfolio_values.append(final_value)
+
+            if total_reward > best_reward:
+                best_reward = total_reward
+
+            if verbose and (ep + 1) % 10 == 0:
+                avg_reward = np.mean(episode_rewards[-10:])
+                avg_value = np.mean(portfolio_values[-10:])
+                print(f"Episode {ep+1}/{episodes} | Avg Reward: {avg_reward:.4f} | "
+                      f"Avg Portfolio: {avg_value:.2f} | Best: {best_reward:.4f}")
+
+        self.trained = True
+
         return {
             'episode_rewards': episode_rewards,
             'portfolio_values': portfolio_values,
             'best_reward': best_reward
         }
-        
+
     def backtest(self, prices=None, features=None, initial_investment=None):
-        """
-        Melakukan backtest agent yang telah dilatih
-        
-        Parameters:
-        -----------
-        prices : array-like, optional
-            Data harga untuk backtest, jika None menggunakan data training
-        features : array-like, optional
-            Fitur untuk backtest, jika None menggunakan data training
-        initial_investment : float, optional
-            Jumlah investasi awal untuk backtest
-            
-        Returns:
-        --------
-        dict
-            Dictionary berisi hasil backtest
-        """
-        # Gunakan data baru jika disediakan, atau kembali ke data training
+        """Run backtest dengan trained agent."""
         if prices is not None or features is not None or initial_investment is not None:
-            test_prices = prices if prices is not None else self.env.prices
-            test_features = features if features is not None else self.env.features
-            test_initial = initial_investment if initial_investment is not None else self.env.initial_balance
-            
+            test_prices = prices if prices is not None else self.prices
+            test_features = features if features is not None else self.features
+            test_initial = initial_investment if initial_investment is not None else self.initial_investment
             test_env = TradingEnv(test_prices, test_features, test_initial)
         else:
             test_env = self.env
-            test_env.reset()
-            
+
         state = test_env.reset()
         done = False
         trades = []
         actions_taken = []
-        
+
         while not done:
-            # Gunakan model untuk memilih aksi
             action, _, _ = self.agent.get_action(state)
             actions_taken.append(action)
-            
-            # Harga saat ini sebelum mengambil langkah
+
             current_price = test_env.prices[test_env.current_step]
             current_shares = test_env.shares
-            current_balance = test_env.balance
             current_step = test_env.current_step
-            
-            # Ambil langkah
+
             next_state, reward, done, info = test_env.step(action)
-            
-            # Rekam trade jika terjadi
-            if action == 1 and info['shares'] > current_shares:  # BUY
+
+            # Record trades
+            if action == 1 and info['shares'] > current_shares:
                 trades.append({
                     'day': current_step,
                     'type': 'BUY',
@@ -724,7 +540,7 @@ class PPOTrader:
                     'shares': info['shares'] - current_shares,
                     'value': (info['shares'] - current_shares) * current_price
                 })
-            elif action == 2 and info['shares'] < current_shares:  # SELL
+            elif action == 2 and info['shares'] < current_shares:
                 trades.append({
                     'day': current_step,
                     'type': 'SELL',
@@ -732,78 +548,82 @@ class PPOTrader:
                     'shares': current_shares - info['shares'],
                     'value': (current_shares - info['shares']) * current_price
                 })
-                
+
             state = next_state
-            
+
         # Calculate performance metrics
         portfolio_values = test_env.portfolio_value_history
         initial_value = portfolio_values[0]
         final_value = portfolio_values[-1]
         total_return = (final_value - initial_value) / initial_value * 100
-        
-        # Calculate max drawdown
+
+        # Max drawdown
         peak = portfolio_values[0]
-        drawdown = 0
+        max_drawdown = 0
         for value in portfolio_values:
             if value > peak:
                 peak = value
             dd = (peak - value) / peak * 100
-            drawdown = max(drawdown, dd)
-        
-        # Calculate Sharpe ratio
+            max_drawdown = max(max_drawdown, dd)
+
+        # Sharpe ratio
         if len(portfolio_values) > 1:
-            daily_returns = [(portfolio_values[i]/portfolio_values[i-1])-1 for i in range(1, len(portfolio_values))]
+            daily_returns = np.diff(portfolio_values) / portfolio_values[:-1]
             sharpe_ratio = np.mean(daily_returns) / (np.std(daily_returns) + 1e-8) * np.sqrt(252)
         else:
             sharpe_ratio = 0
-        
-        # Count win/loss trades
-        win_trades = 0
-        loss_trades = 0
-        for i in range(0, len(trades), 2):
-            if i+1 < len(trades):
-                buy = trades[i]
-                sell = trades[i+1]
-                profit = sell['value'] - buy['value']
-                if profit > 0:
-                    win_trades += 1
-                else:
-                    loss_trades += 1
-        
-        win_rate = 0
-        if win_trades + loss_trades > 0:
-            win_rate = win_trades / (win_trades + loss_trades) * 100
-        
+
+        # Win rate
+        win_trades = sum(1 for i in range(0, len(trades)-1, 2) 
+                        if i+1 < len(trades) and trades[i+1]['value'] > trades[i]['value'])
+        total_pairs = len(trades) // 2
+        win_rate = (win_trades / total_pairs * 100) if total_pairs > 0 else 0
+
         performance = {
             'initial_investment': test_env.initial_balance,
             'final_value': final_value,
             'total_return': total_return,
-            'max_drawdown': drawdown,
+            'max_drawdown': max_drawdown,
             'sharpe_ratio': sharpe_ratio,
             'win_rate': win_rate,
             'num_trades': len(trades)
         }
-        
+
         return {
             'portfolio_values': portfolio_values,
             'trades': trades,
             'performance': performance,
             'actions': actions_taken
-        } 
+        }
+    
+    def save(self, path):
+        """Save model checkpoint."""
+        torch.save({
+            'network_state_dict': self.agent.network.state_dict(),
+            'optimizer_state_dict': self.agent.optimizer.state_dict(),
+        }, path)
+    
+    def load(self, path):
+        """Load model checkpoint."""
+        checkpoint = torch.load(path, map_location=self.agent.device)
+        self.agent.network.load_state_dict(checkpoint['network_state_dict'])
+        self.agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-# --- MultiAssetTradingEnv stub ---
+
 class MultiAssetTradingEnv(gym.Env):
+    """Stub untuk multi-asset trading environment."""
     def __init__(self, prices_dict, features_dict=None, initial_balance=10000, transaction_fee=0.001):
         super().__init__()
-        self.prices_dict = prices_dict  # {symbol: price_array}
+        self.prices_dict = prices_dict
         self.features_dict = features_dict or {k: None for k in prices_dict}
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
-        # TODO: Implement multi-asset state, action, reward, and step logic
-        # This is a stub for future development
+
     def reset(self):
         pass
+
     def step(self, action):
         pass
+
     def _get_observation(self):
         pass

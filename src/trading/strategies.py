@@ -149,7 +149,11 @@ class TradingStrategy:
         str
             Sinyal trading: 'BUY', 'SELL', atau 'HOLD'
         """
-        if params is None or 'ppo_agent' not in params:
+        # Initialize params if None
+        if params is None:
+            params = {}
+            
+        if 'ppo_agent' not in params:
             # Gunakan data sebelumnya untuk training jika belum ada agent
             if 'training_done' not in params or not params['training_done']:
                 # Dapatkan data untuk training (historis sampai indeks saat ini)
