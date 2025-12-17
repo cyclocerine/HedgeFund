@@ -8,7 +8,7 @@
 An artificial intelligence system for portfolio management and automated trading based on **PyTorch** with high adaptability to various market conditions.
 
 <div align="center">
-  <img src="results/integrated_system_test.png" alt="AI Hedge Fund Performance" width="800">
+  
   <p><em>AI Hedge Fund System Performance on Integrated Testing</em></p>
 </div>
 
@@ -396,7 +396,7 @@ Comprehensive testing has been performed on all system components:
 ### RiskManager Performance
 
 <div align="center">
-  <img src="results/multi_asset_portfolio_test.png" alt="Risk Management" width="600">
+  
   <p><em>Portfolio performance with adaptive risk management shows positive returns and minimal drawdown</em></p>
 </div>
 
@@ -408,7 +408,7 @@ Testing shows that RiskManager works well in:
 ### Trading Strategy Comparison
 
 <div align="center">
-  <img src="results/backtest_strategies_comparison.png" alt="Strategy Comparison" width="600">
+ 
   <p><em>Performance comparison of various trading strategies across different market conditions</em></p>
 </div>
 
@@ -420,7 +420,7 @@ Results show that:
 ### PPO Agent Performance
 
 <div align="center">
-  <img src="results/ppo_agent_technical.png" alt="PPO Agent" width="600">
+  
   <p><em>PPO Agent performance with technical indicators - Return 4.44%, Sharpe Ratio 0.53</em></p>
 </div>
 
