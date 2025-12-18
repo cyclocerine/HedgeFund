@@ -176,4 +176,4 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
             trials += 1
             if trials >= max_trials:
                 break
-        return best_model, best_params, best_score 
+        return best_model, best_params, best_score
