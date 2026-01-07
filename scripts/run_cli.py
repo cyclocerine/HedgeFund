@@ -423,6 +423,179 @@ def save_backtest_results(predictor, backtest_results, args):
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
 
+def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, verbose=True, tune=False):
+    """
+    Run PPO backtest with enhanced features - consistent with predict mode.
+    
+    Parameters:
+    -----------
+    prices : np.ndarray
+        Array of historical prices
+    initial_investment : float
+        Initial investment amount
+    episodes : int
+        Number of training episodes (default: 200)
+    ohlcv_df : pd.DataFrame
+        OHLCV DataFrame with Open, High, Low, Close, Volume columns
+    verbose : bool
+        Print training progress
+    tune : bool
+        Enable hyperparameter tuning for PPO agent
+        
+    Returns:
+    --------
+    tuple: (portfolio_values, trades, performance)
+    """
+    from src.trading.ppo_agent import PPOTrader
+    
+    # Check if enhanced features available
+    try:
+        from src.data.feature_engineering import TradingFeatureEngineer
+        use_enhanced = ohlcv_df is not None
+        if use_enhanced:
+            print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+    except ImportError:
+        use_enhanced = False
+        print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
+    
+    # PPO Hyperparameter tuning
+    if tune:
+        print_info("Melakukan PPO Hyperparameter Tuning...")
+        
+        # Hyperparameter search space (simplified for efficiency)
+        hp_configs = [
+            {'lr': 0.0003, 'gamma': 0.99, 'clip_ratio': 0.2},  # Default
+            {'lr': 0.0001, 'gamma': 0.99, 'clip_ratio': 0.1},  # Conservative
+            {'lr': 0.001, 'gamma': 0.95, 'clip_ratio': 0.3},   # Aggressive
+        ]
+        
+        best_reward = float('-inf')
+        best_config = hp_configs[0]
+        best_trader = None
+        
+        tune_episodes = min(50, episodes // 4)  # Quick tune with fewer episodes
+        
+        for i, config in enumerate(hp_configs):
+            print_info(f"Tuning config {i+1}/{len(hp_configs)}: lr={config['lr']}, gamma={config['gamma']}, clip={config['clip_ratio']}")
+            
+            trader = PPOTrader(
+                prices=prices,
+                initial_investment=initial_investment,
+                use_enhanced_features=use_enhanced,
+                ohlcv_df=ohlcv_df
+            )
+            
+            # Apply hyperparameters - use correct attribute names
+            import torch.optim as optim
+            trader.agent.optimizer = optim.Adam(trader.agent.network.parameters(), lr=config['lr'])
+            trader.agent.gamma = config['gamma']
+            trader.agent.clip_ratio = config['clip_ratio']
+            
+            # Quick train
+            results = trader.train(episodes=tune_episodes, verbose=False)
+            
+            if results['best_reward'] > best_reward:
+                best_reward = results['best_reward']
+                best_config = config
+                best_trader = trader
+                print_info(f"  >> New best config! Reward: {best_reward:.4f}")
+        
+        print_success(f"Best config: lr={best_config['lr']}, gamma={best_config['gamma']}, clip_ratio={best_config['clip_ratio']}")
+        
+        # Full training with best config
+        print_info(f"Training dengan config terbaik ({episodes} episodes)...")
+        trader = PPOTrader(
+            prices=prices,
+            initial_investment=initial_investment,
+            use_enhanced_features=use_enhanced,
+            ohlcv_df=ohlcv_df
+        )
+        
+        # Apply best hyperparameters
+        trader.agent.optimizer = optim.Adam(trader.agent.network.parameters(), lr=best_config['lr'])
+        trader.agent.gamma = best_config['gamma']
+        trader.agent.clip_ratio = best_config['clip_ratio']
+        
+        train_results = trader.train(episodes=episodes, verbose=verbose)
+    else:
+        # Create PPOTrader with default hyperparameters
+        trader = PPOTrader(
+            prices=prices,
+            initial_investment=initial_investment,
+            use_enhanced_features=use_enhanced,
+            ohlcv_df=ohlcv_df
+        )
+        
+        # Train agent
+        print_info(f"Melatih PPO agent ({episodes} episodes)...")
+        train_results = trader.train(episodes=episodes, verbose=verbose)
+    
+    # Run backtest
+    print_info("Menjalankan backtest PPO...")
+    backtest_results = trader.backtest()
+    
+    # Extract metrics for compatibility
+    portfolio_values = backtest_results.get('portfolio_values', [])
+    trades = backtest_results.get('trades', [])
+    final_value = portfolio_values[-1] if portfolio_values else initial_investment
+    
+    # Calculate performance metrics
+    if len(portfolio_values) > 1:
+        returns = np.diff(portfolio_values) / portfolio_values[:-1]
+        total_return = (final_value - initial_investment) / initial_investment * 100
+        
+        # Max drawdown
+        peak = portfolio_values[0]
+        max_dd = 0
+        for val in portfolio_values:
+            if val > peak:
+                peak = val
+            dd = (peak - val) / peak * 100
+            max_dd = max(max_dd, dd)
+        
+        # Sharpe ratio
+        if np.std(returns) > 0:
+            sharpe = np.mean(returns) / np.std(returns) * np.sqrt(252)
+        else:
+            sharpe = 0
+        
+        # Win rate
+        buy_prices = []
+        sell_values = []
+        wins = 0
+        losses = 0
+        for trade in trades:
+            if trade.get('type') == 'BUY':
+                buy_prices.append(trade.get('price', 0))
+            elif trade.get('type') == 'SELL' and buy_prices:
+                sell_price = trade.get('price', 0)
+                buy_price = buy_prices.pop(0)
+                if sell_price > buy_price:
+                    wins += 1
+                else:
+                    losses += 1
+        
+        win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+    else:
+        total_return = 0
+        max_dd = 0
+        sharpe = 0
+        win_rate = 0
+    
+    performance = {
+        'initial_investment': initial_investment,
+        'final_value': final_value,
+        'total_return': total_return,
+        'max_drawdown': max_dd,
+        'sharpe_ratio': sharpe,
+        'win_rate': win_rate,
+        'num_trades': len(trades),
+        'best_reward': train_results.get('best_reward', 0)
+    }
+    
+    return portfolio_values, trades, performance
+
+
 def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None):
     """Generate trading signals menggunakan PPO agent dengan enhanced features"""
     print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
@@ -525,7 +698,7 @@ def parse_args():
     parser.add_argument("--end-date", help="Tanggal akhir data (YYYY-MM-DD)")
     parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
     parser.add_argument("--ppo", action="store_true", help="Aktifkan PPO trading signals")
-    parser.add_argument("--ppo-episodes", type=int, default=50, help="Jumlah episode training PPO (default: 50)")
+    parser.add_argument("--ppo-episodes", type=int, default=200, help="Jumlah episode training PPO (default: 200)")
     parser.add_argument("--save-results", action="store_true", help="Simpan hasil prediksi")
     
     # Parameter lookback dan forecast
@@ -718,47 +891,56 @@ def main():
             # Step 6: Run backtest
             print_step(6, total_steps, f"Menjalankan backtest dengan strategi {args.strategy}...")
             
-            backtester = Backtester(y_true, y_pred)
+            # Get OHLCV data from predictor for enhanced features
+            ohlcv_df = predictor.data if hasattr(predictor, 'data') else None
             
-            # Optimize strategy parameters if requested
-            if args.optimize:
-                print_info("Mengoptimalkan parameter strategi...")
-                optimizer = StrategyOptimizer(y_true, y_pred)
-                
-                # Set parameter ranges berdasarkan strategi
-                if args.strategy == 'Trend Following':
-                    param_ranges = {'threshold': [0.005, 0.01, 0.02, 0.03, 0.05]}
-                elif args.strategy == 'Mean Reversion':
-                    param_ranges = {
-                        'window': [3, 5, 10, 15, 20],
-                        'buy_threshold': [0.97, 0.98, 0.99],
-                        'sell_threshold': [1.01, 1.02, 1.03]
-                    }
-                elif args.strategy == 'Predictive':
-                    param_ranges = {
-                        'buy_threshold': [1.005, 1.01, 1.02],
-                        'sell_threshold': [0.98, 0.99, 0.995]
-                    }
-                elif args.strategy == 'PPO':
-                    param_ranges = {
-                        'actor_lr': [0.0001, 0.0003, 0.001],
-                        'critic_lr': [0.0005, 0.001, 0.002],
-                        'gamma': [0.95, 0.97, 0.99],
-                        'clip_ratio': [0.1, 0.2, 0.3],
-                        'episodes': [5, 10]
-                    }
-                else:
-                    param_ranges = {}
-                
-                best_params, best_performance, best_portfolio, best_trades = optimizer.optimize(
-                    args.strategy, param_ranges
+            # Special handling for PPO strategy - use enhanced features
+            if args.strategy == 'PPO':
+                # Use the new run_ppo_backtest function with enhanced features
+                episodes = args.ppo_episodes if hasattr(args, 'ppo_episodes') else 200
+                backtest_results = run_ppo_backtest(
+                    prices=y_true,
+                    initial_investment=args.initial_balance,
+                    episodes=episodes,
+                    ohlcv_df=ohlcv_df,
+                    verbose=True,
+                    tune=args.tune if hasattr(args, 'tune') else False
                 )
-                
-                print_info(f"Parameter optimal: {best_params}")
-                backtest_results = (best_portfolio, best_trades, best_performance)
             else:
-                # Gunakan parameter default
-                backtest_results = backtester.run(args.strategy)
+                # Use traditional backtester for other strategies
+                backtester = Backtester(y_true, y_pred)
+                
+                # Optimize strategy parameters if requested
+                if args.optimize:
+                    print_info("Mengoptimalkan parameter strategi...")
+                    optimizer = StrategyOptimizer(y_true, y_pred)
+                    
+                    # Set parameter ranges berdasarkan strategi
+                    if args.strategy == 'Trend Following':
+                        param_ranges = {'threshold': [0.005, 0.01, 0.02, 0.03, 0.05]}
+                    elif args.strategy == 'Mean Reversion':
+                        param_ranges = {
+                            'window': [3, 5, 10, 15, 20],
+                            'buy_threshold': [0.97, 0.98, 0.99],
+                            'sell_threshold': [1.01, 1.02, 1.03]
+                        }
+                    elif args.strategy == 'Predictive':
+                        param_ranges = {
+                            'buy_threshold': [1.005, 1.01, 1.02],
+                            'sell_threshold': [0.98, 0.99, 0.995]
+                        }
+                    else:
+                        param_ranges = {}
+                    
+                    best_params, best_performance, best_portfolio, best_trades = optimizer.optimize(
+                        args.strategy, param_ranges
+                    )
+                    
+                    print_info(f"Parameter optimal: {best_params}")
+                    backtest_results = (best_portfolio, best_trades, best_performance)
+                else:
+                    # Gunakan parameter default
+                    backtest_results = backtester.run(args.strategy)
             
             print_success("Backtest selesai")
             
