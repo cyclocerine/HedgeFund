@@ -14,7 +14,7 @@ An enterprise-grade portfolio management and automated trading system leveraging
   <p><em>System Performance: Backtest on BMRI.JK showing +240% Return</em></p>
 </div>
 
-## 🚀 Key Features
+## Key Features
 
 ### 1. State-of-the-art Forecasting
 - **PatchTST Model**: Utilizes the latest Transformer-based architecture for time-series forecasting.
@@ -36,7 +36,7 @@ An enterprise-grade portfolio management and automated trading system leveraging
 - **Interactive CLI**: Rich terminal interface with progress bars and real-time status updates.
 - **Multi-Asset Support**: Ready for Stocks, Crypto, Forex, and Commodities.
 
-## 🛠️ Installation
+## Installation
 
 ```bash
 # Clone repository
@@ -54,7 +54,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 📖 Usage Guide
+## Usage Guide
 
 The unified CLI (`scripts/run_cli.py`) is the main entry point for all operations.
 
@@ -92,22 +92,43 @@ python scripts/run_cli.py --ticker BMRI.JK --mode backtest --strategy PPO --tune
 
 ## System Architecture
 
-```mermaid
-graph TD
-    A[Market Data] --> B[Data Pipeline]
-    B --> C{Feature Engineering}
-    C -->|Normalization| D[Technical Scores]
-    D -->|0.0 - 1.0| E[PPO Agent]
-    
-    B --> F[PatchTST Model]
-    F -->|Forecast| G[Price Prediction]
-    
-    E -->|Action| H[Trading Engine]
-    G -->|Trend Context| H
-    
-    H --> I[Portfolio Management]
-    I --> J[Risk Manager]
-    J --> K[Execution]
+```
++-------------------+       +----------------------+
+|    Market Data    | ----> |     Data Pipeline    |
++-------------------+       +----------------------+
+                                       |
+                                       v
+                            +----------------------+
+                            |  Feature Engineering |
+                            +----------------------+
+                                       |
+                  +--------------------+--------------------+
+                  |                                         |
+                  v                                         v
+        +------------------+                      +------------------+
+        |  PatchTST Model  |                      |    PPO Agent     |
+        +------------------+                      +------------------+
+                  |                                         |
+                  v                                         v
+        +------------------+                      +------------------+
+        | Price Prediction |                      |  Trading Signals |
+        +------------------+                      +------------------+
+                  |                                         |
+                  +--------------------+--------------------+
+                                       |
+                                       v
+                            +----------------------+
+                            |    Trading Engine    |
+                            +----------------------+
+                                       |
+                            +----------------------+
+                            |     Risk Manager     |
+                            +----------------------+
+                                       |
+                                       v
+                            +----------------------+
+                            |  Portfolio Execution |
+                            +----------------------+
 ```
 
 ## Performance Verification
@@ -128,6 +149,14 @@ Contributions are welcome! Please examine the `src/` directory for core logic:
 - `src/models/patchtst_model.py`: Deep Learning Forecast Model.
 - `src/trading/ppo_agent.py`: Reinforcement Learning Agent.
 - `src/data/feature_engineering.py`: Technical Indicator Processing.
+
+## References
+
+- Chan, E. P. (2013). *Algorithmic Trading: Winning Strategies and Their Rationale*
+- Sutton, R. S., & Barto, A. G. (2018). *Reinforcement Learning: An Introduction*
+- De Prado, M. L. (2018). *Advances in Financial Machine Learning*
+- Murphy, J. J. *Technical Analysis of the Financial Markets*
+- Nie, Y., et al. (2022). *A Time Series is Worth 64 Words: Long-term Forecasting with Transformers (PatchTST)*
 
 ## License
 
