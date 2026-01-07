@@ -423,67 +423,93 @@ def save_backtest_results(predictor, backtest_results, args):
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
 
-def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30):
-    """Generate trading signals menggunakan PPO agent"""
-    print_info("Melatih PPO agent untuk menghasilkan sinyal trading...")
+def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None):
+    """Generate trading signals menggunakan PPO agent dengan enhanced features"""
+    print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
     
-    # Buat features sederhana
-    import pandas as pd
-    df = pd.DataFrame({'Close': prices})
-    df['Daily_Return'] = df['Close'].pct_change().fillna(0)
-    df['SMA_10'] = df['Close'].rolling(window=10, min_periods=1).mean()
-    df['SMA_20'] = df['Close'].rolling(window=20, min_periods=1).mean()
-    df['Price_SMA_Ratio'] = df['Close'] / df['SMA_20'].replace(0, 1)
-    df['Volatility'] = df['Daily_Return'].rolling(window=20, min_periods=1).std().fillna(0.02)
-    df['Momentum'] = df['Close'].pct_change(periods=20).fillna(0)
+    # Check if enhanced features available
+    try:
+        from src.data.feature_engineering import TradingFeatureEngineer
+        use_enhanced = True
+        print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+    except ImportError:
+        use_enhanced = False
+        print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
     
-    feature_columns = ['Daily_Return', 'Price_SMA_Ratio', 'Volatility', 'Momentum']
-    features = df[feature_columns].values
-    features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+    # Setup PPO with enhanced or legacy features
+    if use_enhanced and ohlcv_df is not None:
+        ppo_trader = PPOTrader(
+            prices=prices,
+            initial_investment=initial_investment,
+            use_enhanced_features=True,
+            ohlcv_df=ohlcv_df
+        )
+    else:
+        # Legacy mode - buat features sederhana
+        import pandas as pd
+        df = pd.DataFrame({'Close': prices})
+        df['Daily_Return'] = df['Close'].pct_change().fillna(0)
+        df['SMA_10'] = df['Close'].rolling(window=10, min_periods=1).mean()
+        df['SMA_20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+        df['Price_SMA_Ratio'] = df['Close'] / df['SMA_20'].replace(0, 1)
+        df['Volatility'] = df['Daily_Return'].rolling(window=20, min_periods=1).std().fillna(0.02)
+        df['Momentum'] = df['Close'].pct_change(periods=20).fillna(0)
+        
+        feature_columns = ['Daily_Return', 'Price_SMA_Ratio', 'Volatility', 'Momentum']
+        features = df[feature_columns].values
+        features = np.nan_to_num(features, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        ppo_trader = PPOTrader(
+            prices=prices,
+            features=features,
+            initial_investment=initial_investment
+        )
     
-    # Setup dan train PPO
-    ppo_trader = PPOTrader(
-        prices=prices,
-        features=features,
-        initial_investment=initial_investment
-    )
+    # Train PPO agent
+    ppo_trader.train(episodes=episodes, verbose=True)
+    print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
     
-    ppo_trader.train(episodes=episodes, verbose=False)
-    print_success("PPO agent selesai dilatih")
-    
-    # Generate signals untuk forecast
-    signals = []
-    
-    # Backtest untuk mendapatkan actions
+    # Backtest untuk mendapatkan performance
     backtest_results = ppo_trader.backtest()
-    actions = backtest_results['actions']
+    perf = backtest_results['performance']
+    
+    print_info(f"PPO Backtest Result: Return={perf['total_return']:.2f}%, Sharpe={perf['sharpe_ratio']:.4f}")
     
     # Generate signals untuk forecast period
-    # Gunakan pattern dari actions terakhir untuk memprediksi
+    signals = []
+    actions = backtest_results['actions']
+    
     for i in range(len(forecast)):
-        # Ambil action terakhir dari training atau gunakan probabilistic
-        if i < len(actions):
-            action = actions[-(len(forecast)-i)] if len(actions) > (len(forecast)-i) else 0
-        else:
-            action = 0  # Default hold
-        
-        # Convert action to signal dengan confidence
-        if action == 1:
-            signal_action = 'buy'
-            confidence = 70 + np.random.uniform(-10, 20)
-        elif action == 2:
-            signal_action = 'sell'
-            confidence = 70 + np.random.uniform(-10, 20)
+        # Ambil action terakhir dari training
+        if len(actions) > 0:
+            recent_actions = actions[-min(20, len(actions)):]
+            # Hitung probabilitas action
+            buy_count = sum(1 for a in recent_actions if a == 1)
+            sell_count = sum(1 for a in recent_actions if a == 2)
+            total = len(recent_actions)
+            
+            buy_prob = buy_count / total
+            sell_prob = sell_count / total
+            
+            if buy_prob > 0.4:
+                signal_action = 'buy'
+                confidence = 50 + buy_prob * 50
+            elif sell_prob > 0.4:
+                signal_action = 'sell'
+                confidence = 50 + sell_prob * 50
+            else:
+                signal_action = 'hold'
+                confidence = 50
         else:
             signal_action = 'hold'
-            confidence = 50 + np.random.uniform(-10, 10)
+            confidence = 50
         
         signals.append({
             'action': signal_action,
             'confidence': min(100, max(0, confidence))
         })
     
-    return signals
+    return signals, backtest_results
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Aplikasi prediksi harga saham dengan PPO trading signals")
@@ -493,11 +519,13 @@ def parse_args():
     parser.add_argument("--mode", required=True, choices=["predict", "backtest"], help="Mode operasi: predict atau backtest")
     
     # Parameter opsional
-    parser.add_argument("--model", default="patchtst", choices=["patchtst"], help="Model prediksi yang digunakan")
+    parser.add_argument("--model", default="patchtst", choices=["patchtst", "improved_patchtst", "ensemble"], help="Model prediksi: patchtst, improved_patchtst, atau ensemble")
+    parser.add_argument("--ensemble", action="store_true", help="Gunakan ensemble model (PatchTST + BiLSTM + XGBoost)")
     parser.add_argument("--start-date", help="Tanggal awal data (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Tanggal akhir data (YYYY-MM-DD)")
     parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
     parser.add_argument("--ppo", action="store_true", help="Aktifkan PPO trading signals")
+    parser.add_argument("--ppo-episodes", type=int, default=50, help="Jumlah episode training PPO (default: 50)")
     parser.add_argument("--save-results", action="store_true", help="Simpan hasil prediksi")
     
     # Parameter lookback dan forecast
@@ -554,14 +582,21 @@ def main():
                 
                 # Step 1: Initialize predictor
                 task1 = progress.add_task("[cyan]Mengunduh data...", total=100)
+                # Determine model type
+                model_type = args.model
+                use_ensemble = args.ensemble or args.model == 'ensemble'
+                if use_ensemble:
+                    model_type = 'patchtst'  # Base model for ensemble
+                
                 predictor = StockPredictor(
                     ticker=args.ticker,
                     start_date=args.start_date,
                     end_date=args.end_date,
                     lookback=args.lookback,
                     forecast_days=args.forecast_days,
-                    model_type=args.model,
-                    tune_hyperparameters=args.tune
+                    model_type=model_type,
+                    tune_hyperparameters=args.tune,
+                    use_ensemble=use_ensemble
                 )
                 progress.update(task1, completed=50, description="[cyan]Mempersiapkan data...")
                 
@@ -572,7 +607,8 @@ def main():
                 progress.update(task1, completed=100, description="[green][OK] Data siap!")
                 
                 # Step 3: Train model
-                task2 = progress.add_task(f"[magenta]Melatih {args.model.upper()}...", total=100)
+                model_name = "ENSEMBLE" if (args.ensemble or args.model == 'ensemble') else args.model.upper()
+                task2 = progress.add_task(f"[magenta]Melatih {model_name}...", total=100)
                 start_time = time.time()
                 
                 # Simulate training progress with animation
@@ -602,14 +638,22 @@ def main():
         else:
             # Fallback tanpa rich
             print_step(1, total_steps, "Memulai prediktor dan mengunduh data...")
+            
+            # Determine model type
+            model_type = args.model
+            use_ensemble = args.ensemble or args.model == 'ensemble'
+            if use_ensemble:
+                model_type = 'patchtst'  # Base model for ensemble
+            
             predictor = StockPredictor(
                 ticker=args.ticker,
                 start_date=args.start_date,
                 end_date=args.end_date,
                 lookback=args.lookback,
                 forecast_days=args.forecast_days,
-                model_type=args.model,
-                tune_hyperparameters=args.tune
+                model_type=model_type,
+                tune_hyperparameters=args.tune,
+                use_ensemble=use_ensemble
             )
             
             print_step(2, total_steps, "Mempersiapkan data...")
@@ -618,7 +662,8 @@ def main():
                 return 1
             print_success("Data berhasil dipersiapkan")
             
-            print_step(3, total_steps, f"Melatih model {args.model.upper()}...")
+            model_name = "ENSEMBLE" if use_ensemble else args.model.upper()
+            print_step(3, total_steps, f"Melatih model {model_name}...")
             start_time = time.time()
             predictor.train_model()
             training_time = time.time() - start_time
@@ -638,13 +683,28 @@ def main():
         if args.mode == 'predict':
             # Generate PPO signals if enabled
             trading_signals = None
+            ppo_backtest = None
             if args.ppo:
-                print_step(6, total_steps, "Menghasilkan sinyal trading dengan PPO...")
-                trading_signals = generate_ppo_signals(
+                print_step(6, total_steps, f"Menghasilkan sinyal trading dengan PPO ({args.ppo_episodes} episodes)...")
+                
+                # Get OHLCV data from predictor if available
+                ohlcv_df = predictor.data if hasattr(predictor, 'data') else None
+                
+                trading_signals, ppo_backtest = generate_ppo_signals(
                     y_true, forecast, 
                     initial_investment=int(args.initial_balance),
-                    episodes=30
+                    episodes=args.ppo_episodes,
+                    ohlcv_df=ohlcv_df
                 )
+                
+                # Print PPO backtest results
+                if ppo_backtest:
+                    print_backtest_results((
+                        ppo_backtest['portfolio_values'],
+                        ppo_backtest['trades'],
+                        ppo_backtest['performance']
+                    ))
+                
                 print_forecast_with_signals(forecast, trading_signals)
                 print_trading_summary(trading_signals)
             else:
