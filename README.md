@@ -9,10 +9,6 @@
 
 An enterprise-grade portfolio management and automated trading system leveraging state-of-the-art Deep Learning (**PatchTST**) and Reinforcement Learning (**PPO**) to navigate financial markets.
 
-<div align="center">
-  <img src="results/BMRI.JK_PPO_20260107_150022_backtest_plot.png" alt="AI Hedge Fund Performance" width="800">
-  <p><em>System Performance: Backtest on BMRI.JK showing +240% Return</em></p>
-</div>
 
 ## Key Features
 
