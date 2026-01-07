@@ -127,7 +127,6 @@ class StrategyOptimizer:
         eval_predicted = self.predicted_prices[train_size:] if self.predicted_prices is not None else None
         
         # Persiapan fitur
-        import numpy as np
         train_features = None
         if train_predicted is not None:
             train_features = np.column_stack((

@@ -4,6 +4,11 @@ PPO Agent Module - PyTorch Version
 
 Implementasi PPO (Proximal Policy Optimization) menggunakan PyTorch untuk trading.
 Fitur: Entropy bonus, GAE, gradient clipping, LR scheduling, value clipping.
+
+Enhanced Features (v2.0):
+- Integrasi dengan TradingFeatureEngineer untuk signal scoring
+- Support MACD, Stochastic RSI, Bollinger Bands, Volume scores
+- ADX validation untuk filter sideways market
 """
 
 import numpy as np
@@ -13,6 +18,13 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import gymnasium as gym
 from gymnasium import spaces
+
+# Import feature engineering (optional, for enhanced mode)
+try:
+    from src.data.feature_engineering import TradingFeatureEngineer, prepare_ppo_features
+    HAS_FEATURE_ENGINEERING = True
+except ImportError:
+    HAS_FEATURE_ENGINEERING = False
 
 
 class Buffer:
@@ -35,20 +47,49 @@ class Buffer:
 class TradingEnv(gym.Env):
     """
     Trading environment yang kompatibel dengan gym untuk reinforcement learning.
+    
+    Enhanced Mode (use_enhanced_features=True):
+        - 8 base portfolio features + 6 technical signal scores = 14 total features
+        - Signal scores normalized 0.0-1.0 dengan 0.5 = neutral
+        - ADX validation untuk filter sideways market
     """
-    def __init__(self, prices, features=None, initial_balance=10000, transaction_fee=0.001):
+    def __init__(self, prices, features=None, initial_balance=10000, 
+                 transaction_fee=0.001, use_enhanced_features=False,
+                 ohlcv_df=None):
         super(TradingEnv, self).__init__()
 
         self.prices = np.array(prices).flatten()
-        self.features = features if features is not None else np.zeros((len(prices), 1))
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
+        self.use_enhanced_features = use_enhanced_features
+        
+        # Enhanced features mode
+        if use_enhanced_features and HAS_FEATURE_ENGINEERING:
+            self.feature_engineer = TradingFeatureEngineer(
+                ohlcv_df=ohlcv_df, 
+                prices=self.prices
+            )
+            self.enhanced_features = self.feature_engineer.get_features_for_ppo_all()
+            # 8 base + 6 enhanced = 14 features
+            self.n_enhanced_features = 6
+        else:
+            self.feature_engineer = None
+            self.enhanced_features = None
+            self.n_enhanced_features = 0
+        
+        # External features (for backward compatibility)
+        self.features = features if features is not None else np.zeros((len(prices), 1))
 
-        # State shape
+        # State shape: base (8) + enhanced (6) + external features
+        if use_enhanced_features and self.enhanced_features is not None:
+            obs_dim = 8 + self.n_enhanced_features
+        else:
+            obs_dim = 8 + self.features.shape[1]
+            
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(8 + self.features.shape[1],),
+            shape=(obs_dim,),
             dtype=np.float32
         )
 
@@ -149,7 +190,7 @@ class TradingEnv(gym.Env):
     def _get_observation(self):
         current_price = self.prices[self.current_step]
 
-        # Technical indicators
+        # Technical indicators (base)
         if self.current_step >= 20:
             sma_short = np.mean(self.prices[self.current_step-5:self.current_step+1])
             sma_long = np.mean(self.prices[self.current_step-20:self.current_step+1])
@@ -164,15 +205,7 @@ class TradingEnv(gym.Env):
             price_sma_ratio_long = 0
             volatility = 0.02
 
-        # Get features
-        try:
-            current_features = self.features[self.current_step]
-            if not isinstance(current_features, np.ndarray):
-                current_features = np.array(current_features, dtype=np.float32)
-            current_features = current_features.flatten().astype(np.float32)
-        except (IndexError, TypeError):
-            current_features = np.zeros(self.features.shape[1], dtype=np.float32)
-
+        # Base portfolio info (8 features)
         base_info = np.array([
             self.balance / self.initial_balance,
             self.shares * current_price / self.initial_balance,
@@ -183,6 +216,21 @@ class TradingEnv(gym.Env):
             price_sma_ratio_long,
             volatility * 10
         ], dtype=np.float32)
+
+        # Enhanced mode: use pre-computed signal scores
+        if self.use_enhanced_features and self.enhanced_features is not None:
+            # Get pre-computed features for current step (6 features)
+            tech_features = self.enhanced_features[self.current_step]
+            return np.concatenate([base_info, tech_features]).astype(np.float32)
+        
+        # Legacy mode: use external features
+        try:
+            current_features = self.features[self.current_step]
+            if not isinstance(current_features, np.ndarray):
+                current_features = np.array(current_features, dtype=np.float32)
+            current_features = current_features.flatten().astype(np.float32)
+        except (IndexError, TypeError):
+            current_features = np.zeros(self.features.shape[1], dtype=np.float32)
 
         return np.concatenate([base_info, current_features])
 
@@ -425,25 +473,49 @@ class PPOAgent:
 class PPOTrader:
     """
     Wrapper class untuk menerapkan PPO dalam konteks trading.
+    
+    Args:
+        prices: Array harga Close
+        features: Optional external features (legacy mode)
+        initial_investment: Modal awal
+        log_dir: Direktori untuk logging
+        use_enhanced_features: Jika True, gunakan signal scoring dari TradingFeatureEngineer
+        ohlcv_df: DataFrame OHLCV untuk enhanced features (opsional, lebih akurat)
     """
-    def __init__(self, prices, features=None, initial_investment=10000, log_dir=None):
-        # Generate basic features jika tidak disediakan
-        if features is None:
-            prices_arr = np.array(prices).flatten()
-            returns = np.zeros_like(prices_arr)
-            returns[1:] = (prices_arr[1:] / prices_arr[:-1]) - 1
-
-            volatility = np.zeros_like(prices_arr)
-            window = 10
-            for i in range(window, len(returns)):
-                volatility[i] = np.std(returns[i-window+1:i+1])
-
-            features = np.column_stack((returns, volatility))
-
+    def __init__(self, prices, features=None, initial_investment=10000, log_dir=None,
+                 use_enhanced_features=False, ohlcv_df=None):
+        
         self.prices = np.array(prices).flatten()
-        self.features = features
         self.initial_investment = initial_investment
-        self.env = TradingEnv(self.prices, features, initial_investment)
+        self.use_enhanced_features = use_enhanced_features
+        self.ohlcv_df = ohlcv_df
+        
+        # Enhanced mode: use signal scoring
+        if use_enhanced_features and HAS_FEATURE_ENGINEERING:
+            self.features = None  # Not used in enhanced mode
+            self.env = TradingEnv(
+                self.prices, 
+                features=None,
+                initial_balance=initial_investment,
+                use_enhanced_features=True,
+                ohlcv_df=ohlcv_df
+            )
+        else:
+            # Legacy mode: generate basic features if not provided
+            if features is None:
+                prices_arr = self.prices
+                returns = np.zeros_like(prices_arr)
+                returns[1:] = (prices_arr[1:] / prices_arr[:-1]) - 1
+
+                volatility = np.zeros_like(prices_arr)
+                window = 10
+                for i in range(window, len(returns)):
+                    volatility[i] = np.std(returns[i-window+1:i+1])
+
+                features = np.column_stack((returns, volatility))
+            
+            self.features = features
+            self.env = TradingEnv(self.prices, features, initial_investment)
 
         state_dim = self.env.observation_space.shape[0]
         action_dim = self.env.action_space.n
