@@ -90,7 +90,7 @@ python scripts/run_cli.py --ticker BMRI.JK --mode backtest --strategy PPO --tune
 | `--initial-balance` | Starting capital for backtest | `100,000,000` |
 | `--save-results` | Save plots and CSVs to `results/` | `False` |
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```mermaid
 graph TD
@@ -110,7 +110,7 @@ graph TD
     J --> K[Execution]
 ```
 
-## 📊 Performance Verification
+## Performance Verification
 
 Latest comprehensive test results (Jan 2026):
 
@@ -122,14 +122,14 @@ Latest comprehensive test results (Jan 2026):
 | **Best Reward** | **+4.10** | **+3.70** |
 | **Portfolio** | Stable Growth | **+240% Return** |
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please examine the `src/` directory for core logic:
 - `src/models/patchtst_model.py`: Deep Learning Forecast Model.
 - `src/trading/ppo_agent.py`: Reinforcement Learning Agent.
 - `src/data/feature_engineering.py`: Technical Indicator Processing.
 
-## 📄 License
+## License
 
 [MIT](LICENSE)
 
