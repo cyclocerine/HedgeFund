@@ -339,7 +339,7 @@ def print_backtest_results(results):
         print(f"Jumlah Transaksi: {performance['num_trades']}")
         print("-" * 40)
 
-def save_results(predictor, y_true, y_pred, forecast, args, signals=None):
+def save_results(predictor, y_true, y_pred, forecast, args, signals=None, metrics=None, ppo_results=None):
     """Menyimpan hasil prediksi ke file"""
     try:
         # Buat direktori results jika belum ada
@@ -369,13 +369,17 @@ def save_results(predictor, y_true, y_pred, forecast, args, signals=None):
         # Simpan hasil dalam CSV
         try:
             import pandas as pd
+            import json
+            
+            # 1. Simpan Historical + Prediction
             df = pd.DataFrame({
                 'Day': range(len(y_true)),
                 'Actual': y_true,
                 'Predicted': y_pred
             })
+            df.to_csv(f"{filename}_historical.csv", index=False)
             
-            # Tambahkan forecast
+            # 2. Simpan Forecast
             forecast_df = pd.DataFrame({
                 'Day': range(len(y_true), len(y_true) + len(forecast)),
                 'Forecast': forecast
@@ -385,12 +389,31 @@ def save_results(predictor, y_true, y_pred, forecast, args, signals=None):
             if signals:
                 forecast_df['Signal'] = [s.get('action', 'hold') for s in signals]
                 forecast_df['Confidence'] = [s.get('confidence', 0) for s in signals]
-            
-            df.to_csv(f"{filename}_historical.csv", index=False)
+                
             forecast_df.to_csv(f"{filename}_forecast.csv", index=False)
-            print_success(f"Hasil disimpan ke {filename}_historical.csv dan {filename}_forecast.csv")
+            
+            # 3. Simpan Evaluasi Metrics
+            if metrics:
+                # Convert metrics to native python types for JSON serialization
+                serializable_metrics = {k: float(v) if hasattr(v, 'item') else v for k, v in metrics.items()}
+                with open(f"{filename}_metrics.json", 'w') as f:
+                    json.dump(serializable_metrics, f, indent=4)
+            
+            # 4. Simpan PPO Results (jika ada)
+            if ppo_results:
+                # Extract clean performance dict
+                ppo_perf = ppo_results.get('performance', {})
+                serializable_ppo = {k: float(v) if hasattr(v, 'item') else v for k, v in ppo_perf.items()}
+                with open(f"{filename}_ppo_results.json", 'w') as f:
+                    json.dump(serializable_ppo, f, indent=4)
+                    
+            print_success(f"Hasil lengkap disimpan di:")
+            print_success(f" - CSV: {filename}_historical.csv & {filename}_forecast.csv")
+            if metrics: print_success(f" - Metrics: {filename}_metrics.json")
+            if ppo_results: print_success(f" - PPO Results: {filename}_ppo_results.json")
+            
         except Exception as e:
-            print_warning(f"Gagal menyimpan hasil ke CSV: {str(e)}")
+            print_warning(f"Gagal menyimpan hasil ke CSV/JSON: {str(e)}")
             
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil: {str(e)}")
@@ -408,7 +431,7 @@ def save_backtest_results(predictor, backtest_results, args):
         
         portfolio_values, trades, performance = backtest_results
         
-        # Simpan plot
+        # 1. Simpan plot
         plt.figure(figsize=(12, 6))
         plt.plot(portfolio_values, label='Nilai Portfolio', color='blue')
         plt.title(f'{args.ticker} - Backtest dengan {args.strategy}')
@@ -418,7 +441,29 @@ def save_backtest_results(predictor, backtest_results, args):
         plt.savefig(f"{filename}_plot.png", dpi=300, bbox_inches='tight')
         plt.close()
         
-        print_success(f"Plot backtest disimpan ke {filename}_plot.png")
+        # 2. Simpan Metrics ke JSON
+        import json
+        with open(f"{filename}_metrics.json", 'w') as f:
+            json.dump(performance, f, indent=4)
+            
+        # 3. Simpan Portfolio History ke CSV
+        import pandas as pd
+        portfolio_df = pd.DataFrame({
+            'Day': range(len(portfolio_values)),
+            'Portfolio_Value': portfolio_values
+        })
+        portfolio_df.to_csv(f"{filename}_portfolio.csv", index=False)
+        
+        # 4. Simpan Trade Log ke CSV
+        if trades:
+            trades_df = pd.DataFrame(trades)
+            trades_df.to_csv(f"{filename}_trades.csv", index=False)
+        
+        print_success(f"Hasil Backtest lengkap disimpan di:")
+        print_success(f" - Plot: {filename}_plot.png")
+        print_success(f" - Metrics: {filename}_metrics.json")
+        print_success(f" - Portfolio: {filename}_portfolio.csv")
+        print_success(f" - Trades: {filename}_trades.csv" if trades else " - Trades: Tidak ada trades")
         
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
@@ -885,7 +930,7 @@ def main():
             
             # Save results if requested
             if args.save_results:
-                save_results(predictor, y_true, y_pred, forecast, args, trading_signals)
+                save_results(predictor, y_true, y_pred, forecast, args, trading_signals, metrics, ppo_backtest)
                 
         elif args.mode == 'backtest':
             # Step 6: Run backtest
