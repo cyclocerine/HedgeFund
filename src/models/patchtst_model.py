@@ -514,8 +514,41 @@ class PatchTSTWrapper:
 # Hyperparameter tuning interface
 from itertools import product
 
-def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, max_trials=10, log_dir=None, progress_callback=None):
+def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, max_trials=10, log_dir=None, progress_callback=None, default_params=None):
     tuning_method = param_grid.pop('tuning_method', 'grid') if 'tuning_method' in param_grid else 'grid'
+    
+    # Initialize with worst possible score
+    best_score = float('inf')
+    best_params = None
+    best_model = None
+
+    # 1. Evaluate Default Params First (Baseline)
+    if default_params:
+        if progress_callback:
+            progress_callback(0, "Evaluating Default Parameters (Baseline)...")
+        else:
+            print(f"Evaluating Default Parameters: {default_params}")
+            
+        try:
+            # Create and train default model
+            baseline_model = PatchTSTWrapper(input_dim=X_train.shape[2], progress_callback=progress_callback, **default_params)
+            baseline_model.fit(X_train, y_train, X_val, y_val, epochs=20, batch_size=32, verbose=0)
+            
+            # Evaluate
+            y_pred = baseline_model.predict(X_val)
+            score = np.mean((y_pred - y_val.flatten())**2)
+            
+            if progress_callback:
+                 progress_callback(5, f"Baseline MSE: {score:.4f}")
+            else:
+                 print(f"Baseline MSE: {score:.4f}")
+                 
+            best_score = score
+            best_params = default_params
+            best_model = baseline_model
+        except Exception as e:
+            print(f"Failed to evaluate baseline: {str(e)}")
+
     if tuning_method == 'bayesian':
         def objective(trial):
             params = {
@@ -532,17 +565,23 @@ def patchtst_hyperparameter_search(X_train, y_train, X_val, y_val, param_grid, m
             y_pred = model.predict(X_val)
             score = np.mean((y_pred - y_val.flatten())**2)
             return score
+        
         study = optuna.create_study(direction='minimize')
+        # Enqueue default params if available
+        if default_params:
+            study.enqueue_trial(default_params)
+            
         study.optimize(objective, n_trials=max_trials)
-        best_params = study.best_trial.params
-        best_model = PatchTSTWrapper(input_dim=X_train.shape[2], progress_callback=progress_callback, **best_params)
-        best_model.fit(X_train, y_train, X_val, y_val, epochs=20, batch_size=32, verbose=0)
-        best_score = study.best_value
+        
+        if study.best_value < best_score:
+            best_params = study.best_trial.params
+            best_model = PatchTSTWrapper(input_dim=X_train.shape[2], progress_callback=progress_callback, **best_params)
+            best_model.fit(X_train, y_train, X_val, y_val, epochs=20, batch_size=32, verbose=0)
+            best_score = study.best_value
+            
         return best_model, best_params, best_score
     else:
-        best_score = float('inf')
-        best_params = None
-        best_model = None
+        # Grid Search
         keys, values = zip(*param_grid.items())
         trials = 0
         for v in product(*values):

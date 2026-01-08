@@ -63,7 +63,7 @@ class TradingEnv(gym.Env):
     """
     def __init__(self, prices, features=None, initial_balance=10000, 
                  transaction_fee=0.001, use_enhanced_features=False,
-                 ohlcv_df=None):
+                 ohlcv_df=None, observation_noise=0.0):
         super(TradingEnv, self).__init__()
 
         self.prices = np.array(prices).flatten()
@@ -71,6 +71,8 @@ class TradingEnv(gym.Env):
         self.transaction_fee = transaction_fee
         self.use_enhanced_features = use_enhanced_features
         self.ohlcv_df = ohlcv_df
+        self.observation_noise = observation_noise
+        
         
         # Risk Management Config
         self.risk_per_trade = 0.02  # 2% Risk per trade
@@ -92,7 +94,7 @@ class TradingEnv(gym.Env):
             tr2 = (high - close.shift(1)).abs()
             tr3 = (low - close.shift(1)).abs()
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-            self.atr = tr.rolling(14).mean().fillna(method='bfill').values
+            self.atr = tr.rolling(14).mean().bfill().values
             
             # ADX for Regime Filter
             # (Assumes TradingFeatureEngineer calculates it, or we calculate approximations)
@@ -100,7 +102,7 @@ class TradingEnv(gym.Env):
         else:
             # Approx ATR from Close only
             tr = prices_series.diff().abs()
-            self.atr = tr.rolling(14).mean().fillna(method='bfill').values
+            self.atr = tr.rolling(14).mean().bfill().values
         
         # Enhanced features mode
         if use_enhanced_features and HAS_FEATURE_ENGINEERING:
@@ -150,6 +152,7 @@ class TradingEnv(gym.Env):
         # Risk Management State
         self.stop_loss_price = 0.0
         self.peak_price_since_entry = 0.0
+        self.prev_drawdown = 0.0
 
         return self._get_observation()
 
@@ -180,7 +183,7 @@ class TradingEnv(gym.Env):
                     self.stop_loss_price = potential_new_sl
 
         # ---------------------------------------------------------
-        # 2. REGIME FILTER (Trend Filter)
+        # 2. REGIME FILTER (Trend Filter) - RESTORED FOR ROBUSTNESS
         # ---------------------------------------------------------
         # Filter Buy (Action 1) if Price < EMA 200 (Downtrend)
         is_uptrend = current_price > self.ema200[self.current_step]
@@ -250,26 +253,54 @@ class TradingEnv(gym.Env):
 
         self.portfolio_value_history.append(new_portfolio_value)
 
-        # ---------------------------------------------------------
-        # 4. REWARD SHAPING (Risk-Adjusted)
-        # ---------------------------------------------------------
-        portfolio_return = (new_portfolio_value - prev_portfolio_value) / prev_portfolio_value
-        
         # Calculate Drawdown from Peak
         max_portfolio = max(self.portfolio_value_history)
         drawdown = (max_portfolio - new_portfolio_value) / max_portfolio if max_portfolio > 0 else 0
-        
-        # Risk-Adjusted Reward: Profit - (Drawdown * Penalty)
-        # Increased penalty from 0.1 to 0.5 as requested
-        reward = portfolio_return - (0.5 * drawdown)
 
-        # Transaction cost penalty
+        # ---------------------------------------------------------
+        # 4. REWARD SHAPING (Asymmetric Scaling) - CONFIDENCE BOOST
+        # ---------------------------------------------------------
+        # Base: Log-Utility * 15 (increased from 10)
+        ratio = new_portfolio_value / prev_portfolio_value
+        reward = np.log(ratio + 1e-9) * 15
+        
+        
+        if ratio > 1.0:
+            reward *= 1.2
+        
+        # Drawdown Penalty (Relaxed to allow breathing room)
+        delta_drawdown = max(0, drawdown - self.prev_drawdown)
+        reward -= (delta_drawdown * 12)  # Reduced from 20 to 12
+        
+        # Explicit Transaction Penalty (Calibrated)
         if action != 0:
-            reward -= 0.001
+            reward -= self.transaction_fee
+            
+        # Activity Reward (Motivation to Trade)
+        # Bonus for taking action AND being profitable
+        if action != 0 and ratio > 1.0:
+            reward += 0.05  # Increased from 0.01 to be more motivating
+            
+        # Additional penalty for hitting Stop Loss (Reduced)
+        # Log-Utility already penalizes the drop heavily, so we just nudge it
+        if forced_sell:
+            reward -= 0.1 
+            
+        # B. DIFFERENTIAL DRAWDOWN PENALTY (Optional, kept small)
+        # Keeping it but relying mostly on Log-Utility
+        # delta_drawdown = max(0, drawdown - self.prev_drawdown)
+        # reward -= (delta_drawdown * 10) 
+        
+        # Update prev_drawdown
+        self.prev_drawdown = drawdown
+
+        # C. ACTION TAX REMOVED
+        # if action != 0: reward -= 0.001 (Removed)
             
         # Additional penalty for hitting Stop Loss? (Optional, implied by loss)
-        if forced_sell:
-            reward -= 0.01
+        # Additional penalty for hitting Stop Loss? (Optional, implied by loss)
+        # if forced_sell:
+        #    reward -= 1.0 # Removed (Too harsh)
 
         # End episode bonus
         if self.done:
@@ -340,7 +371,19 @@ class TradingEnv(gym.Env):
         except (IndexError, TypeError):
             current_features = np.zeros(self.features.shape[1], dtype=np.float32)
 
-        return np.concatenate([base_info, current_features])
+        obs = np.concatenate([base_info, current_features if not self.use_enhanced_features else tech_features])
+        
+        # Add Noise Injection (Training only)
+        if self.observation_noise > 0:
+            noise = np.random.normal(0, self.observation_noise, obs.shape)
+            obs += noise
+            
+        return obs.astype(np.float32)
+
+    def set_difficulty(self, fee, noise):
+        """Update difficulty parameters for curriculum learning."""
+        self.transaction_fee = fee
+        self.observation_noise = noise
 
 
 class ActorCritic(nn.Module):
@@ -419,7 +462,7 @@ class PPOAgent:
         batch_size=64,
         epochs=10,
         lam=0.95,
-        entropy_coef=0.01,
+        entropy_coef=0.005,
         value_coef=0.5,
         max_grad_norm=0.5,
         device=None
@@ -591,12 +634,14 @@ class PPOTrader:
         ohlcv_df: DataFrame OHLCV untuk enhanced features (opsional, lebih akurat)
     """
     def __init__(self, prices, features=None, initial_investment=10000, log_dir=None,
-                 use_enhanced_features=False, ohlcv_df=None):
+                 use_enhanced_features=False, ohlcv_df=None, transaction_fee=0.001, train_noise_level=0.0):
         
         self.prices = np.array(prices).flatten()
         self.initial_investment = initial_investment
         self.use_enhanced_features = use_enhanced_features
         self.ohlcv_df = ohlcv_df
+        self.transaction_fee = transaction_fee
+        self.train_noise_level = train_noise_level
         
         # Enhanced mode: use signal scoring
         if use_enhanced_features and HAS_FEATURE_ENGINEERING:
@@ -606,7 +651,9 @@ class PPOTrader:
                 features=None,
                 initial_balance=initial_investment,
                 use_enhanced_features=True,
-                ohlcv_df=ohlcv_df
+                ohlcv_df=ohlcv_df,
+                transaction_fee=transaction_fee,
+                observation_noise=train_noise_level
             )
         else:
             # Legacy mode: generate basic features if not provided
@@ -648,6 +695,41 @@ class PPOTrader:
         best_reward = -np.inf
 
         for ep in range(episodes):
+            # Curriculum Learning Logic
+            # Phase 1 (0-33%): Easy (Fee 0.1%, Noise 0)
+            # Phase 2 (33-66%): Medium (Fee 0.2%, Noise 0.01)
+            # Phase 3 (66-100%): Hard (Fee 0.5%, Noise 0.02)
+            if ep < episodes * 0.33:
+                curr_fee = 0.001
+                curr_noise = 0.0
+                phase = "Easy"
+            elif ep < episodes * 0.66:
+                curr_fee = 0.002
+                curr_noise = 0.01
+                phase = "Medium"
+            else:
+                curr_fee = 0.005 # Increased fee pressure
+                curr_noise = 0.02 # Chaos mode
+                phase = "Hard"
+                
+            if hasattr(self.env, 'set_difficulty'):
+                self.env.set_difficulty(curr_fee, curr_noise)
+            
+            # Entropy Decay (Learning stabilization)
+            # Start 0.05 (Exploration) -> End 0.001 (Exploitation)
+            start_entropy = 0.05
+            end_entropy = 0.001
+            decay_rate = 0.99
+            
+            # Linear Decay based on progress
+            progress = ep / episodes
+            current_entropy = start_entropy * (1 - progress) + end_entropy * progress
+            current_entropy = max(end_entropy, current_entropy)
+            
+            # Update agent entropy
+            if hasattr(self.agent, 'entropy_coef'):
+                self.agent.entropy_coef = current_entropy
+                
             state = self.env.reset()
             total_reward = 0
             
@@ -676,7 +758,7 @@ class PPOTrader:
             if verbose and (ep + 1) % 10 == 0:
                 avg_reward = np.mean(episode_rewards[-10:])
                 avg_value = np.mean(portfolio_values[-10:])
-                print(f"Episode {ep+1}/{episodes} | Avg Reward: {avg_reward:.4f} | "
+                print(f"Episode {ep+1}/{episodes} [{phase}] | Avg Reward: {avg_reward:.4f} | "
                       f"Avg Portfolio: {avg_value:.2f} | Best: {best_reward:.4f}")
 
         self.trained = True
@@ -693,7 +775,14 @@ class PPOTrader:
             test_prices = prices if prices is not None else self.prices
             test_features = features if features is not None else self.features
             test_initial = initial_investment if initial_investment is not None else self.initial_investment
-            test_env = TradingEnv(test_prices, test_features, test_initial)
+            test_env = TradingEnv(
+                test_prices, 
+                test_features, 
+                test_initial,
+                transaction_fee=self.transaction_fee,
+                use_enhanced_features=self.use_enhanced_features,
+                ohlcv_df=self.ohlcv_df
+            )
         else:
             test_env = self.env
 

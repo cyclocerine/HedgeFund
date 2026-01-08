@@ -691,29 +691,39 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
     actions = backtest_results['actions']
     
     for i in range(len(forecast)):
-        # Ambil action terakhir dari training
-        if len(actions) > 0:
-            recent_actions = actions[-min(20, len(actions)):]
-            # Hitung probabilitas action
-            buy_count = sum(1 for a in recent_actions if a == 1)
-            sell_count = sum(1 for a in recent_actions if a == 2)
-            total = len(recent_actions)
-            
-            buy_prob = buy_count / total
-            sell_prob = sell_count / total
-            
-            if buy_prob > 0.4:
-                signal_action = 'buy'
-                confidence = 50 + buy_prob * 50
-            elif sell_prob > 0.4:
-                signal_action = 'sell'
-                confidence = 50 + sell_prob * 50
-            else:
-                signal_action = 'hold'
-                confidence = 50
+        # Generate signal using TRAINED MODEL's softmax output
+        import torch
+        
+        # Get last observation from trained environment
+        state = ppo_trader.env._get_observation()
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(ppo_trader.agent.device)
+        
+        # Get action probabilities from trained network
+        with torch.no_grad():
+            action_probs, _ = ppo_trader.agent.network(state_tensor)
+            probs = action_probs.cpu().numpy().flatten()
+        
+        # probs[0] = HOLD, probs[1] = BUY, probs[2] = SELL
+        hold_prob = probs[0] if len(probs) > 0 else 0.33
+        buy_prob = probs[1] if len(probs) > 1 else 0.33
+        sell_prob = probs[2] if len(probs) > 2 else 0.33
+        
+        # Determine signal based on highest probability
+        if buy_prob > 0.5:
+            signal_action = 'buy'
+            confidence = buy_prob * 100
+        elif sell_prob > 0.5:
+            signal_action = 'sell'
+            confidence = sell_prob * 100
+        elif buy_prob > sell_prob and buy_prob > hold_prob:
+            signal_action = 'buy'
+            confidence = buy_prob * 100
+        elif sell_prob > buy_prob and sell_prob > hold_prob:
+            signal_action = 'sell'
+            confidence = sell_prob * 100
         else:
             signal_action = 'hold'
-            confidence = 50
+            confidence = hold_prob * 100
         
         signals.append({
             'action': signal_action,

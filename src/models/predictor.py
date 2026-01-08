@@ -205,12 +205,25 @@ class StockPredictor:
                 }
                 if self.patchtst_param_grid:
                     param_grid.update(self.patchtst_param_grid)
+                
+                # Define robust default parameters (Baseline)
+                default_params = {
+                    'patch_len': 16,
+                    'stride': 8,
+                    'd_model': 128,
+                    'n_heads': 4,
+                    'n_layers': 2,
+                    'dropout': 0.1,
+                    'lr': 0.001
+                }
+                
                 self.model, best_params, best_score = patchtst_hyperparameter_search(
                     X_train, y_train, X_val, y_val,
                     param_grid=param_grid,
                     max_trials=10,
                     log_dir=self.log_dir,
-                    progress_callback=self.progress_callback
+                    progress_callback=self.progress_callback,
+                    default_params=default_params
                 )
             else:
                 # Use improved PatchTST with positional encoding
