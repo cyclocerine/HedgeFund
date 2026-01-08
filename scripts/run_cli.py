@@ -654,16 +654,9 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
     
-    # Setup PPO with enhanced or legacy features
-    if use_enhanced and ohlcv_df is not None:
-        ppo_trader = PPOTrader(
-            prices=prices,
-            initial_investment=initial_investment,
-            use_enhanced_features=True,
-            ohlcv_df=ohlcv_df
-        )
-    else:
-        # Legacy mode - buat features sederhana
+    # Prepare legacy features if needed (only once)
+    features = None
+    if not use_enhanced or ohlcv_df is None:
         import pandas as pd
         df = pd.DataFrame({'Close': prices})
         df['Daily_Return'] = df['Close'].pct_change().fillna(0)

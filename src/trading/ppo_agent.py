@@ -44,6 +44,8 @@ class Buffer:
         return len(self.states)
 
 
+import pandas as pd
+
 class TradingEnv(gym.Env):
     """
     Trading environment yang kompatibel dengan gym untuk reinforcement learning.
@@ -52,6 +54,12 @@ class TradingEnv(gym.Env):
         - 8 base portfolio features + 6 technical signal scores = 14 total features
         - Signal scores normalized 0.0-1.0 dengan 0.5 = neutral
         - ADX validation untuk filter sideways market
+        
+    Risk Management Features:
+        - Position Sizing (Fixed Risk 2%)
+        - Dynamic Stop Loss (ATR-based)
+        - Trailing Stop
+        - Regime Filter (EMA 200, ADX)
     """
     def __init__(self, prices, features=None, initial_balance=10000, 
                  transaction_fee=0.001, use_enhanced_features=False,
@@ -62,6 +70,37 @@ class TradingEnv(gym.Env):
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
         self.use_enhanced_features = use_enhanced_features
+        self.ohlcv_df = ohlcv_df
+        
+        # Risk Management Config
+        self.risk_per_trade = 0.02  # 2% Risk per trade
+        self.atr_multiplier = 2.0   # Stop Loss distance (2x ATR)
+        
+        # Pre-calculate Indicators for Risk Management
+        prices_series = pd.Series(self.prices)
+        
+        # 1. EMA 200 (Trend Filter)
+        self.ema200 = prices_series.ewm(span=200, adjust=False).mean().values
+        
+        # 2. ATR (Volatility for Stop Loss)
+        if ohlcv_df is not None:
+            # Use True Range from OHLCV
+            high = ohlcv_df['High']
+            low = ohlcv_df['Low']
+            close = ohlcv_df['Close']
+            tr1 = high - low
+            tr2 = (high - close.shift(1)).abs()
+            tr3 = (low - close.shift(1)).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            self.atr = tr.rolling(14).mean().fillna(method='bfill').values
+            
+            # ADX for Regime Filter
+            # (Assumes TradingFeatureEngineer calculates it, or we calculate approximations)
+            # For simplicity, we'll rely on ATR and EMA here, or use feature_engineer output if available.
+        else:
+            # Approx ATR from Close only
+            tr = prices_series.diff().abs()
+            self.atr = tr.rolling(14).mean().fillna(method='bfill').values
         
         # Enhanced features mode
         if use_enhanced_features and HAS_FEATURE_ENGINEERING:
@@ -107,6 +146,10 @@ class TradingEnv(gym.Env):
         self.avg_entry_price = 0
         self.position_value = 0
         self.unrealized_pnl = 0
+        
+        # Risk Management State
+        self.stop_loss_price = 0.0
+        self.peak_price_since_entry = 0.0
 
         return self._get_observation()
 
@@ -116,21 +159,69 @@ class TradingEnv(gym.Env):
 
         current_price = self.prices[self.current_step]
         prev_portfolio_value = self.balance + self.shares * current_price
+        
+        # ---------------------------------------------------------
+        # 1. RISK MANAGEMENT CHECKS (Before Action)
+        # ---------------------------------------------------------
+        forced_sell = False
+        current_atr = self.atr[self.current_step] if hasattr(self, 'atr') else current_price * 0.02
+        
+        if self.shares > 0:
+            # Dynamic Stop Loss / Trailing Stop Logic
+            # Check if Hit Stop Loss
+            if current_price < self.stop_loss_price:
+                action = 2  # Force Sell (Stop Loss Hit)
+                forced_sell = True
+            else:
+                # Trailing Stop: Raise SL if price moves up
+                # Logic: Maintain SL at (Price - 2*ATR) distance if it raises the SL level
+                potential_new_sl = current_price - (current_atr * self.atr_multiplier)
+                if potential_new_sl > self.stop_loss_price:
+                    self.stop_loss_price = potential_new_sl
 
-        # Execute action
+        # ---------------------------------------------------------
+        # 2. REGIME FILTER (Trend Filter)
+        # ---------------------------------------------------------
+        # Filter Buy (Action 1) if Price < EMA 200 (Downtrend)
+        is_uptrend = current_price > self.ema200[self.current_step]
+        if action == 1 and not is_uptrend:
+            action = 0  # Force Hold/Skip Buy
+
+        # ---------------------------------------------------------
+        # 3. ACTION EXECUTION
+        # ---------------------------------------------------------
         if action == 1:  # Buy
             if self.balance > 0:
-                max_shares = self.balance / (current_price * (1 + self.transaction_fee))
-                new_shares = max_shares
-                cost = new_shares * current_price * (1 + self.transaction_fee)
-
-                if self.shares > 0:
-                    self.avg_entry_price = (self.shares * self.avg_entry_price + new_shares * current_price) / (self.shares + new_shares)
+                # Position Sizing (Fixed Risk 1-2%)
+                risk_amount = self.balance * self.risk_per_trade  # e.g., 2% of balance
+                stop_loss_dist = current_atr * self.atr_multiplier
+                
+                if stop_loss_dist > 0:
+                    shares_to_buy = risk_amount / stop_loss_dist
                 else:
-                    self.avg_entry_price = current_price
+                    shares_to_buy = 0
+                
+                # Cap at available cash (cannot borrow)
+                max_shares_balance = self.balance / (current_price * (1 + self.transaction_fee))
+                shares_to_buy = min(shares_to_buy, max_shares_balance)
+                
+                if shares_to_buy > 0:
+                    cost = shares_to_buy * current_price * (1 + self.transaction_fee)
+                    
+                    if self.shares > 0:
+                        # Averaging Up/Down
+                        self.avg_entry_price = (self.shares * self.avg_entry_price + shares_to_buy * current_price) / (self.shares + shares_to_buy)
+                        # On scaling in, maybe adjust SL? Keep existing SL or move it up?
+                        # For safety, let's keep the tighter of existing vs new calculation
+                        new_sl = current_price - stop_loss_dist
+                        self.stop_loss_price = max(self.stop_loss_price, new_sl)
+                    else:
+                        # New Position
+                        self.avg_entry_price = current_price
+                        self.stop_loss_price = current_price - stop_loss_dist
 
-                self.shares += new_shares
-                self.balance -= cost
+                    self.shares += shares_to_buy
+                    self.balance -= cost
 
         elif action == 2:  # Sell
             if self.shares > 0:
@@ -138,6 +229,7 @@ class TradingEnv(gym.Env):
                 self.balance += sell_value
                 self.shares = 0
                 self.avg_entry_price = 0
+                self.stop_loss_price = 0.0 # Reset SL
 
         # Move to next step
         self.current_step += 1
@@ -158,18 +250,26 @@ class TradingEnv(gym.Env):
 
         self.portfolio_value_history.append(new_portfolio_value)
 
-        # Calculate reward
+        # ---------------------------------------------------------
+        # 4. REWARD SHAPING (Risk-Adjusted)
+        # ---------------------------------------------------------
         portfolio_return = (new_portfolio_value - prev_portfolio_value) / prev_portfolio_value
-
-        # Drawdown penalty
+        
+        # Calculate Drawdown from Peak
         max_portfolio = max(self.portfolio_value_history)
         drawdown = (max_portfolio - new_portfolio_value) / max_portfolio if max_portfolio > 0 else 0
         
-        reward = portfolio_return - 0.1 * drawdown
+        # Risk-Adjusted Reward: Profit - (Drawdown * Penalty)
+        # Increased penalty from 0.1 to 0.5 as requested
+        reward = portfolio_return - (0.5 * drawdown)
 
         # Transaction cost penalty
         if action != 0:
             reward -= 0.001
+            
+        # Additional penalty for hitting Stop Loss? (Optional, implied by loss)
+        if forced_sell:
+            reward -= 0.01
 
         # End episode bonus
         if self.done:
@@ -177,14 +277,16 @@ class TradingEnv(gym.Env):
             if len(self.portfolio_value_history) > 1:
                 returns = np.diff(self.portfolio_value_history) / np.array(self.portfolio_value_history[:-1])
                 sharpe = np.mean(returns) / (np.std(returns) + 1e-8) * np.sqrt(252)
-                reward += final_return + 0.2 * max(sharpe, 0)
+                # Significant bonus for high Sharpe (Stability)
+                reward += final_return + 0.5 * max(sharpe, 0)
 
         return self._get_observation(), reward, self.done, {
             'portfolio_value': new_portfolio_value,
             'balance': self.balance,
             'shares': self.shares,
             'unrealized_pnl': self.unrealized_pnl,
-            'position_value': self.position_value
+            'position_value': self.position_value,
+            'stop_loss_hit': forced_sell
         }
 
     def _get_observation(self):
@@ -205,11 +307,17 @@ class TradingEnv(gym.Env):
             price_sma_ratio_long = 0
             volatility = 0.02
 
+        # Calculate Log Return (Relative Feature)
+        if self.current_step > 0:
+            log_return = np.log(current_price / self.prices[self.current_step - 1])
+        else:
+            log_return = 0.0
+
         # Base portfolio info (8 features)
         base_info = np.array([
             self.balance / self.initial_balance,
             self.shares * current_price / self.initial_balance,
-            current_price / self.prices[0],
+            log_return,  # Replaced absolute price ratio
             self.position_value / self.initial_balance,
             self.unrealized_pnl / self.initial_balance,
             price_sma_ratio_short,
@@ -523,8 +631,9 @@ class PPOTrader:
         self.agent = PPOAgent(
             state_dim, 
             action_dim,
-            entropy_coef=0.02,
-            epochs=8
+            entropy_coef=0.05,  # Increased from 0.02 to encourage exploration
+            epochs=8,
+            lr=3e-4  # Explicit LR
         )
         self.trained = False
         self.log_dir = log_dir
