@@ -503,6 +503,26 @@ class TradingFeatureEngineer:
         self._indicators['trend_direction'] = trend
         return trend
     
+    def calculate_weekly_trend(self) -> np.ndarray:
+        """
+        Calculate Weekly Trend and Price deviation.
+        Returns array of 'price_to_weekly_ema_ratio'.
+        """
+        if self.has_ohlcv:
+            # Resample to Weekly
+            prices_weekly = self.df['Close'].resample('W').last()
+            ema10_weekly = prices_weekly.ewm(span=10).mean()
+            
+            # Reindex to daily (ffill)
+            weekly_trend = ema10_weekly.reindex(self.df.index, method='ffill')
+            self._indicators['weekly_trend_ratio'] = (self.df['Close'] / weekly_trend - 1).fillna(0).values
+        else:
+            # Approximation if only prices available (assume 5 days/week)
+            ema10_weekly = pd.Series(self.prices).ewm(span=10*5).mean()
+            self._indicators['weekly_trend_ratio'] = (self.prices / ema10_weekly - 1).fillna(0).values
+            
+        return self._indicators['weekly_trend_ratio']
+
     def get_all_scores(self) -> Dict[str, np.ndarray]:
         """Calculate and return all signal scores."""
         self.score_macd()
@@ -510,14 +530,16 @@ class TradingFeatureEngineer:
         self.score_bollinger()
         self.score_volume()
         self.calculate_trend_direction()
+        self.calculate_weekly_trend()  # NEW
         
         return {
             'macd_score': self._scores['macd_score'],
             'stoch_rsi_score': self._scores['stoch_rsi_score'],
             'bb_score': self._scores['bb_score'],
             'volume_score': self._scores['volume_score'],
-            'adx_normalized': self._indicators['adx'] / 100,  # Normalize to 0-1
-            'trend_direction': self._indicators['trend_direction']
+            'adx_normalized': self._indicators['adx'] / 100,
+            'trend_direction': self._indicators['trend_direction'],
+            'weekly_trend': self._indicators['weekly_trend_ratio']
         }
     
     # =========================================================================
@@ -539,8 +561,9 @@ class TradingFeatureEngineer:
             self._scores['stoch_rsi_score'][step],
             self._scores['bb_score'][step],
             self._scores['volume_score'][step],
-            self._indicators['adx'][step] / 100,  # Normalized 0-1
-            (self._indicators['trend_direction'][step] + 1) / 2  # Map -1,0,1 to 0, 0.5, 1
+            self._indicators['adx'][step] / 100,
+            (self._indicators['trend_direction'][step] + 1) / 2,
+            np.clip(self._indicators['weekly_trend_ratio'][step] * 10, -1.0, 1.0) # Scaled & Clipped
         ], dtype=np.float32)
         
         return features
@@ -561,7 +584,8 @@ class TradingFeatureEngineer:
             self._scores['bb_score'],
             self._scores['volume_score'],
             self._indicators['adx'] / 100,
-            (self._indicators['trend_direction'] + 1) / 2
+            (self._indicators['trend_direction'] + 1) / 2,
+            np.clip(self._indicators['weekly_trend_ratio'] * 10, -1.0, 1.0)
         ]).astype(np.float32)
         
         return features
@@ -582,12 +606,15 @@ class TradingFeatureEngineer:
             - 4 Signal Scores (0-1)
             - ADX normalized
             - BB %B
+            - [Optional] 4 Macro Features (if available in df)
         """
         self.calculate_all_indicators()
         self.get_all_scores()
         
+        feature_list = []
+        
         if use_scores:
-            features = np.column_stack([
+            feature_list = [
                 self._indicators['log_returns'],
                 self._indicators['price_zscore'],
                 self._scores['macd_score'],
@@ -596,10 +623,10 @@ class TradingFeatureEngineer:
                 self._scores['volume_score'],
                 self._indicators['adx'] / 100,
                 np.clip(self._indicators['bb_percent_b'], 0, 1)  # Clip to 0-1
-            ]).astype(np.float32)
+            ]
         else:
             # Raw indicators (more features, potentially more info)
-            features = np.column_stack([
+            feature_list = [
                 self._indicators['log_returns'],
                 self._indicators['price_zscore'],
                 self._indicators['rsi'] / 100,
@@ -609,7 +636,15 @@ class TradingFeatureEngineer:
                 self._indicators['adx'] / 100,
                 np.clip(self._indicators['bb_percent_b'], 0, 1),
                 np.clip(self._indicators['volume_ratio'] / 3, 0, 1)  # Normalize volume ratio
-            ]).astype(np.float32)
+            ]
+            
+        # Add Macro Features if available
+        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
+        if hasattr(self, 'df') and all(col in self.df.columns for col in macro_cols):
+             for col in macro_cols:
+                 feature_list.append(self.df[col].values)
+        
+        features = np.column_stack(feature_list).astype(np.float32)
         
         # Handle any remaining NaN
         features = np.nan_to_num(features, nan=0.5)

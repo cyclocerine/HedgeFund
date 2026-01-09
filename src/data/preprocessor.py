@@ -35,6 +35,10 @@ class DataPreprocessor:
                 progress=False
             )
             
+            # Fix for yfinance returning MultiIndex columns
+            if isinstance(self.data.columns, pd.MultiIndex):
+                self.data.columns = self.data.columns.get_level_values(0)
+            
             if self.data.empty:
                 raise ValueError(f"No data found for ticker {self.ticker}")
                 
@@ -59,7 +63,15 @@ class DataPreprocessor:
         try:
             if self.data is None:
                 raise ValueError("No data available. Please download data first.")
-                
+            
+            # Fetch Macro Data
+            try:
+                from .feature_engineering import prepare_macro_features
+                print("Fetching global macro data (VIX, NASDAQ, DJI, TNX)...")
+                self.data = prepare_macro_features(self.data)
+            except Exception as e:
+                print(f"Warning: Could not fetch macro data: {str(e)}")
+
             # Buat DataFrame baru untuk menyimpan indikator
             indicators = pd.DataFrame(index=self.data.index)
             
@@ -116,7 +128,8 @@ class DataPreprocessor:
                 'Close', 'Volume', 'SMA_14', 'SMA_50', 'SMA_200',
                 'EMA_9', 'EMA_21', 'EMA_55', 'RSI', 'MACD',
                 'Signal_Line', 'MACD_Histogram', 'ADX',
-                'Volume_Ratio', 'Momentum', 'ROC'
+                'Volume_Ratio', 'Momentum', 'ROC',
+                'macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix'
             ]
             
             # Pastikan semua kolom ada

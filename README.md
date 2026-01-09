@@ -23,11 +23,13 @@ An enterprise-grade portfolio management and automated trading system leveraging
 - **Multi-Horizon Prediction**: Forecasts 1, 7, 14, and 30 days ahead simultaneously
 - **Bayesian Hyperparameter Tuning**: Integrated Optuna optimization for model fine-tuning
 
-### 2. Intelligent Trading Agent (PPO v2.2)
+### 2. Intelligent Trading Agent (PPO v2.3)
 - **Reinforcement Learning**: Uses Proximal Policy Optimization (PPO) for autonomous trading decisions
+- **Global Macro Awareness**: Inputs include NASDAQ, DJI, TNX, and VIX for regime detection
+- **Multi-Scale Vision**: Analyzes Weekly Trend simultaneously with Daily action ('Context-Aware')
+- **Differential Sharpe Reward**: Maximizes risk-adjusted return (Sharpe) instead of raw profit
 - **Curriculum Learning**: 3-phase training (Easy → Medium → Hard) for robust agent development
-- **Asymmetric Reward Scaling**: `reward * 15` with `1.2x` bonus for profitable trades
-- **Entropy Decay**: Dynamic exploration-exploitation balance (0.05 → 0.001)
+- **Volatility-Aware Execution**: Simulates realistic slippage based on ATR (worse execution in crashes)
 - **Enhanced Features**: 14+ technical signals including MACD, Stochastic RSI, Bollinger Bands, ADX
 
 ### 3. Robustness Framework
@@ -133,11 +135,11 @@ python scripts/stress_test.py
 
 ## Technical Deep Dive
 
-### PPO Agent Architecture (v2.2)
+### PPO Agent Architecture (v2.3)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    PPO AGENT V2.2                           │
+│                    PPO AGENT V2.3                           │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
@@ -152,14 +154,18 @@ python scripts/stress_test.py
 │  └─────────────────────────────────────────────────────┘   │
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
-│                    REWARD SHAPING                           │
+│               REWARD SHAPING (Differential Sharpe)          │
+│               "Consistency over Greed"                      │
 ├─────────────────────────────────────────────────────────────┤
-│  reward = log(ratio) * 15           # Asymmetric Scaling   │
-│  if profit: reward *= 1.2           # Bonus for winning    │
-│  reward -= delta_drawdown * 12      # Risk penalty         │
-│  if action != HOLD: reward -= fee   # Transaction cost     │
-│  if action != HOLD && profit:       # Activity bonus       │
-│      reward += 0.05                                         │
+│  DSR = (B * (R - A) - 0.5 * A * (R^2 - B)) / (B - A^2)^1.5  │
+│                                                             │
+│  Where:                                                     │
+│  R = Current Return                                         │
+│  A = Exponential Moving Average of Return (Consistency)     │
+│  B = Exponential Moving Average of Return^2 (Volatility)    │
+│                                                             │
+│  Objective: Maximize Sharpe Ratio step-by-step              │
+│  Penalty: High Volatility, Drawdown, Transaction Fee        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -204,17 +210,17 @@ else:
                                        v
                             +----------------------+
                             |  Feature Engineering |
-                            |  (14+ Technical      |
-                            |   Indicators)        |
+                            |  + Global Macro (VIX)|
+                            |  + Weekly Trend      |
                             +----------------------+
                                        |
                   +--------------------+--------------------+
                   |                                         |
                   v                                         v
         +------------------+                      +------------------+
-        |  PatchTST Model  |                      |   PPO Agent V2.2 |
-        |  (Transformer)   |                      |  (Curriculum +   |
-        |                  |                      |   Asymmetric)    |
+        |  PatchTST Model  |                      |   PPO Agent V2.3 |
+        |  (Transformer)   |                      |  (DSR + Context  |
+        |                  |                      |   + Curriculum)  |
         +------------------+                      +------------------+
                   |                                         |
                   v                                         v
@@ -234,6 +240,7 @@ else:
                                        v
                             +----------------------+
                             |  Portfolio Execution |
+                            | (Vol-Aware Slippage) |
                             +----------------------+
 ```
 
@@ -294,6 +301,6 @@ Contributions are welcome! Key files to explore:
 ---
 
 <div align="center">
-  <p><strong>AI Hedge Fund V2.2</strong> - Intelligent Algorithmic Trading for the Digital Era</p>
+  <p><strong>AI Hedge Fund V2.3</strong> - Intelligent Algorithmic Trading for the Digital Era</p>
   <p><em>Built with PyTorch, PPO, and PatchTST</em></p>
 </div>

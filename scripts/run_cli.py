@@ -504,6 +504,14 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     except ImportError:
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
+
+    # Prepare macro features
+    macro_features = None
+    if use_enhanced and ohlcv_df is not None:
+        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
+        if all(col in ohlcv_df.columns for col in macro_cols):
+            macro_features = ohlcv_df[macro_cols].values
+            print_info("Mengintegrasikan 4 Macro Features (VIX, NASDAQ, DJI, TNX)")
     
     # PPO Hyperparameter tuning
     if tune:
@@ -530,7 +538,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
                 initial_investment=initial_investment,
                 use_enhanced_features=use_enhanced,
                 ohlcv_df=ohlcv_df,
-                train_noise_level=train_noise_level
+                train_noise_level=train_noise_level,
+                macro_features=macro_features
             )
             
             # Apply hyperparameters - use correct attribute names
@@ -557,7 +566,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
             ohlcv_df=ohlcv_df,
-            train_noise_level=train_noise_level
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
         
         # Apply best hyperparameters
@@ -573,7 +583,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
             ohlcv_df=ohlcv_df,
-            train_noise_level=train_noise_level
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
         
         # Train agent
@@ -661,6 +672,14 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
     except ImportError:
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
+                
+    # Prepare macro features
+    macro_features = None
+    if use_enhanced and ohlcv_df is not None:
+        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
+        if all(col in ohlcv_df.columns for col in macro_cols):
+            macro_features = ohlcv_df[macro_cols].values
+            print_info("Mengintegrasikan 4 Macro Features (VIX, NASDAQ, DJI, TNX)")
     
     # Create PPOTrader based on available features
     if use_enhanced and ohlcv_df is not None:
@@ -669,7 +688,8 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
             initial_investment=initial_investment,
             use_enhanced_features=True,
             ohlcv_df=ohlcv_df,
-            train_noise_level=train_noise_level
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
     else:
         # Prepare legacy features

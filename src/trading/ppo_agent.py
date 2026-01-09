@@ -44,6 +44,35 @@ class Buffer:
         return len(self.states)
 
 
+class RunningMeanStd:
+    """Dynamically calculates mean and std for feature normalization."""
+    def __init__(self, shape=()):
+        self.mean = np.zeros(shape, 'float64')
+        self.var = np.ones(shape, 'float64')
+        self.count = 1e-4
+
+    def update(self, x):
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0] if x.ndim > 1 else 1
+        self.update_from_moments(batch_mean, batch_var, batch_count)
+
+    def update_from_moments(self, batch_mean, batch_var, batch_count):
+        delta = batch_mean - self.mean
+        tot_count = self.count + batch_count
+
+        new_mean = self.mean + delta * batch_count / tot_count
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + np.square(delta) * self.count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
+
+        self.mean = new_mean
+        self.var = new_var
+        self.count = new_count
+
+
 import pandas as pd
 
 class TradingEnv(gym.Env):
@@ -75,8 +104,17 @@ class TradingEnv(gym.Env):
         self.observation_noise = observation_noise
         
         # Global Macro Features (NASDAQ, DJI, TNX, VIX log returns)
+        # Global Macro Features (NASDAQ, DJI, TNX, VIX log returns)
         self.macro_features = macro_features  # Shape: (n_steps, 4)
         self.n_macro_features = 4 if macro_features is not None else 0
+        
+        # Dynamic Scaling for Macro Features
+        if self.n_macro_features > 0:
+            self.macro_ms = RunningMeanStd(shape=(self.n_macro_features,))
+            # Init with full history for stable scaling
+            self.macro_ms.update(self.macro_features)
+        else:
+            self.macro_ms = None
         
         # Slippage Simulation (Anti-Overfit)
         self.slippage_range = slippage_range
@@ -119,8 +157,8 @@ class TradingEnv(gym.Env):
                 prices=self.prices
             )
             self.enhanced_features = self.feature_engineer.get_features_for_ppo_all()
-            # 8 base + 6 enhanced = 14 features
-            self.n_enhanced_features = 6
+            # 8 base + 7 enhanced = 15 features (added Weekly Trend)
+            self.n_enhanced_features = 7
         else:
             self.feature_engineer = None
             self.enhanced_features = None
@@ -161,6 +199,10 @@ class TradingEnv(gym.Env):
         self.stop_loss_price = 0.0
         self.peak_price_since_entry = 0.0
         self.prev_drawdown = 0.0
+        
+        # Differential Sharpe Ratio State
+        self.dsr_m1 = 0.0 # Running mean return
+        self.dsr_m2 = 0.0 # Running mean square return
 
         return self._get_observation()
 
@@ -169,6 +211,7 @@ class TradingEnv(gym.Env):
             return self._get_observation(), 0, self.done, {}
 
         current_price = self.prices[self.current_step]
+        shares_before_action = self.shares
         prev_portfolio_value = self.balance + self.shares * current_price
         
         # ---------------------------------------------------------
@@ -217,8 +260,16 @@ class TradingEnv(gym.Env):
                 shares_to_buy = min(shares_to_buy, max_shares_balance)
                 
                 if shares_to_buy > 0:
-                    # Slippage Simulation (Buy at worse price)
-                    slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                    # Slippage Simulation (Volatility Aware)
+                    # Base slippage + Volatility penalty
+                    # Example: 0.0001 + (ATR/Price * 0.1)
+                    if hasattr(self, 'atr'):
+                        vol_ratio = current_atr / current_price
+                        slippage = self.slippage_range[0] + vol_ratio * 0.1
+                        slippage = min(slippage, self.slippage_range[1]) # Cap at max slippage
+                    else:
+                         slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                    
                     execution_price = current_price * (1 + slippage)
                     
                     cost = shares_to_buy * execution_price * (1 + self.transaction_fee)
@@ -240,8 +291,14 @@ class TradingEnv(gym.Env):
 
         elif action == 2:  # Sell
             if self.shares > 0:
-                # Slippage Simulation (Sell at worse price)
-                slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                # Slippage Simulation (Sell at worse price) (Volatility Aware)
+                if hasattr(self, 'atr'):
+                    vol_ratio = current_atr / current_price
+                    slippage = self.slippage_range[0] + vol_ratio * 0.1
+                    slippage = min(slippage, self.slippage_range[1])
+                else:
+                    slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                    
                 execution_price = current_price * (1 - slippage)
                 
                 sell_value = self.shares * execution_price * (1 - self.transaction_fee)
@@ -274,33 +331,47 @@ class TradingEnv(gym.Env):
         drawdown = (max_portfolio - new_portfolio_value) / max_portfolio if max_portfolio > 0 else 0
 
         # ---------------------------------------------------------
-        # 4. REWARD SHAPING (Asymmetric Scaling) - CONFIDENCE BOOST
+        # 4. REWARD SHAPING: Differential Sharpe Ratio (DSR)
         # ---------------------------------------------------------
-        # Base: Log-Utility * 15 (increased from 10)
-        ratio = new_portfolio_value / prev_portfolio_value
-        reward = np.log(ratio + 1e-9) * 15
+        # Calculate current step return
+        current_return = (new_portfolio_value / prev_portfolio_value) - 1
         
+        # Update running statistics (Exponential Moving Average)
+        eta = 0.01  # Adaptation rate (approx 100-step memory)
+        delta_m1 = current_return - self.dsr_m1
+        self.dsr_m1 += eta * delta_m1
+        self.dsr_m2 += eta * (current_return**2 - self.dsr_m2)
         
-        if ratio > 1.0:
-            reward *= 1.2
+        # Calculate DSR
+        # D_t = (B_{t-1} * (R_t - A_{t-1}) - 0.5 * A_{t-1} * (R_t^2 - B_{t-1})) / (B_{t-1} - A_{t-1}^2)^(3/2)
+        # Simplified:
+        denominator = np.sqrt(self.dsr_m2 - self.dsr_m1**2 + 1e-9)
+        # Prevent division by zero or explosive rewards during initialization
+        if denominator < 1e-6:
+             dsr_reward = current_return * 10 # Fallback to simple return
+        else:
+             dsr_reward = (self.dsr_m2 * delta_m1 - 0.5 * self.dsr_m1 * (current_return**2 - self.dsr_m2)) / (denominator**3 + 1e-9)
         
-        # Drawdown Penalty (Relaxed to allow breathing room)
+        # Scale DSR to be meaningful (DSR is typically small)
+        reward = np.clip(dsr_reward, -5.0, 5.0)
+        
+        # Explicit Transaction Penalty (Still needed to discourage churning)
+        if action != 0 and self.shares != shares_before_action: # Only if actually traded
+             reward -= self.transaction_fee * 5
+             
+        # Stop Loss Penalty (Nudge)
+        if forced_sell:
+             reward -= 0.5
+             
+        # Drawdown Penalty (Secondary objective)
         delta_drawdown = max(0, drawdown - self.prev_drawdown)
-        reward -= (delta_drawdown * 12)  # Reduced from 20 to 12
-        
-        # Explicit Transaction Penalty (Calibrated)
-        if action != 0:
-            reward -= self.transaction_fee
+        reward -= (delta_drawdown * 5)
             
         # Activity Reward (Motivation to Trade)
         # Bonus for taking action AND being profitable
+        ratio = new_portfolio_value / prev_portfolio_value
         if action != 0 and ratio > 1.0:
-            reward += 0.05  # Increased from 0.01 to be more motivating
-            
-        # Additional penalty for hitting Stop Loss (Reduced)
-        # Log-Utility already penalizes the drop heavily, so we just nudge it
-        if forced_sell:
-            reward -= 0.1 
+            reward += 0.05 
             
         # B. DIFFERENTIAL DRAWDOWN PENALTY (Optional, kept small)
         # Keeping it but relying mostly on Log-Utility
@@ -393,8 +464,13 @@ class TradingEnv(gym.Env):
             macro = self.macro_features[self.current_step]
             if not isinstance(macro, np.ndarray):
                 macro = np.array(macro, dtype=np.float32)
-            # Scale macro returns (typically -0.03 to +0.03) to ~(-1, 1)
-            macro_scaled = np.clip(macro * 30, -1.0, 1.0)
+            # Dynamic Scaling using RunningMeanStd
+            # Update scaler (optional: only update during training? For now, update always to adapt)
+            # self.macro_ms.update(macro) # Might cause drift during inference if not careful.
+            # Ideally, freeze stats during inference. But let's keep it simple: Use current stats.
+            
+            macro_norm = (macro - self.macro_ms.mean) / (np.sqrt(self.macro_ms.var) + 1e-8)
+            macro_scaled = np.clip(macro_norm, -5.0, 5.0) # Clip extreme outliers
             obs = np.concatenate([obs, macro_scaled.flatten()])
         elif self.n_macro_features > 0:
             # Pad with zeros if macro data unavailable
