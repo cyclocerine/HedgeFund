@@ -468,7 +468,7 @@ def save_backtest_results(predictor, backtest_results, args):
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
 
-def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, verbose=True, tune=False):
+def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, verbose=True, tune=False, train_noise_level=0.0):
     """
     Run PPO backtest with enhanced features - consistent with predict mode.
     
@@ -486,6 +486,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
         Print training progress
     tune : bool
         Enable hyperparameter tuning for PPO agent
+    train_noise_level : float
+        Noise injection level for PPO training (0.0-0.1)
         
     Returns:
     --------
@@ -527,7 +529,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
                 prices=prices,
                 initial_investment=initial_investment,
                 use_enhanced_features=use_enhanced,
-                ohlcv_df=ohlcv_df
+                ohlcv_df=ohlcv_df,
+                train_noise_level=train_noise_level
             )
             
             # Apply hyperparameters - use correct attribute names
@@ -553,7 +556,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             prices=prices,
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
-            ohlcv_df=ohlcv_df
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level
         )
         
         # Apply best hyperparameters
@@ -568,7 +572,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             prices=prices,
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
-            ohlcv_df=ohlcv_df
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level
         )
         
         # Train agent
@@ -641,22 +646,33 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     return portfolio_values, trades, performance
 
 
-def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None):
+def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0):
     """Generate trading signals menggunakan PPO agent dengan enhanced features"""
     print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
     
     # Check if enhanced features available
     try:
         from src.data.feature_engineering import TradingFeatureEngineer
-        use_enhanced = True
-        print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+        use_enhanced = ohlcv_df is not None
+        if use_enhanced:
+            print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+            if train_noise_level > 0:
+                print_info(f"Noise Injection: {train_noise_level*100:.1f}%")
     except ImportError:
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
     
-    # Prepare legacy features if needed (only once)
-    features = None
-    if not use_enhanced or ohlcv_df is None:
+    # Create PPOTrader based on available features
+    if use_enhanced and ohlcv_df is not None:
+        ppo_trader = PPOTrader(
+            prices=prices,
+            initial_investment=initial_investment,
+            use_enhanced_features=True,
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level
+        )
+    else:
+        # Prepare legacy features
         import pandas as pd
         df = pd.DataFrame({'Close': prices})
         df['Daily_Return'] = df['Close'].pct_change().fillna(0)
@@ -747,6 +763,7 @@ def parse_args():
     parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
     parser.add_argument("--ppo", action="store_true", help="Aktifkan PPO trading signals")
     parser.add_argument("--ppo-episodes", type=int, default=200, help="Jumlah episode training PPO (default: 200)")
+    parser.add_argument("--train-noise", type=float, default=0.0, help="Noise injection level for PPO training (0.0-0.1, default: 0.0)")
     parser.add_argument("--save-results", action="store_true", help="Simpan hasil prediksi")
     
     # Parameter lookback dan forecast
@@ -915,7 +932,8 @@ def main():
                     y_true, forecast, 
                     initial_investment=int(args.initial_balance),
                     episodes=args.ppo_episodes,
-                    ohlcv_df=ohlcv_df
+                    ohlcv_df=ohlcv_df,
+                    train_noise_level=args.train_noise
                 )
                 
                 # Print PPO backtest results
@@ -952,7 +970,8 @@ def main():
                     episodes=episodes,
                     ohlcv_df=ohlcv_df,
                     verbose=True,
-                    tune=args.tune if hasattr(args, 'tune') else False
+                    tune=args.tune if hasattr(args, 'tune') else False,
+                    train_noise_level=args.train_noise if hasattr(args, 'train_noise') else 0.0
                 )
             else:
                 # Use traditional backtester for other strategies

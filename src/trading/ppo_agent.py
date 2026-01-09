@@ -63,7 +63,8 @@ class TradingEnv(gym.Env):
     """
     def __init__(self, prices, features=None, initial_balance=10000, 
                  transaction_fee=0.001, use_enhanced_features=False,
-                 ohlcv_df=None, observation_noise=0.0):
+                 ohlcv_df=None, observation_noise=0.0, macro_features=None,
+                 slippage_range=(0.0, 0.0005)):
         super(TradingEnv, self).__init__()
 
         self.prices = np.array(prices).flatten()
@@ -72,6 +73,13 @@ class TradingEnv(gym.Env):
         self.use_enhanced_features = use_enhanced_features
         self.ohlcv_df = ohlcv_df
         self.observation_noise = observation_noise
+        
+        # Global Macro Features (NASDAQ, DJI, TNX, VIX log returns)
+        self.macro_features = macro_features  # Shape: (n_steps, 4)
+        self.n_macro_features = 4 if macro_features is not None else 0
+        
+        # Slippage Simulation (Anti-Overfit)
+        self.slippage_range = slippage_range
         
         
         # Risk Management Config
@@ -121,11 +129,11 @@ class TradingEnv(gym.Env):
         # External features (for backward compatibility)
         self.features = features if features is not None else np.zeros((len(prices), 1))
 
-        # State shape: base (8) + enhanced (6) + external features
+        # State shape: base (8) + enhanced (6) + macro (3) + external features
         if use_enhanced_features and self.enhanced_features is not None:
-            obs_dim = 8 + self.n_enhanced_features
+            obs_dim = 8 + self.n_enhanced_features + self.n_macro_features
         else:
-            obs_dim = 8 + self.features.shape[1]
+            obs_dim = 8 + self.features.shape[1] + self.n_macro_features
             
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -209,18 +217,22 @@ class TradingEnv(gym.Env):
                 shares_to_buy = min(shares_to_buy, max_shares_balance)
                 
                 if shares_to_buy > 0:
-                    cost = shares_to_buy * current_price * (1 + self.transaction_fee)
+                    # Slippage Simulation (Buy at worse price)
+                    slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                    execution_price = current_price * (1 + slippage)
+                    
+                    cost = shares_to_buy * execution_price * (1 + self.transaction_fee)
                     
                     if self.shares > 0:
                         # Averaging Up/Down
-                        self.avg_entry_price = (self.shares * self.avg_entry_price + shares_to_buy * current_price) / (self.shares + shares_to_buy)
+                        self.avg_entry_price = (self.shares * self.avg_entry_price + shares_to_buy * execution_price) / (self.shares + shares_to_buy)
                         # On scaling in, maybe adjust SL? Keep existing SL or move it up?
                         # For safety, let's keep the tighter of existing vs new calculation
                         new_sl = current_price - stop_loss_dist
                         self.stop_loss_price = max(self.stop_loss_price, new_sl)
                     else:
                         # New Position
-                        self.avg_entry_price = current_price
+                        self.avg_entry_price = execution_price
                         self.stop_loss_price = current_price - stop_loss_dist
 
                     self.shares += shares_to_buy
@@ -228,7 +240,11 @@ class TradingEnv(gym.Env):
 
         elif action == 2:  # Sell
             if self.shares > 0:
-                sell_value = self.shares * current_price * (1 - self.transaction_fee)
+                # Slippage Simulation (Sell at worse price)
+                slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
+                execution_price = current_price * (1 - slippage)
+                
+                sell_value = self.shares * execution_price * (1 - self.transaction_fee)
                 self.balance += sell_value
                 self.shares = 0
                 self.avg_entry_price = 0
@@ -360,18 +376,29 @@ class TradingEnv(gym.Env):
         if self.use_enhanced_features and self.enhanced_features is not None:
             # Get pre-computed features for current step (6 features)
             tech_features = self.enhanced_features[self.current_step]
-            return np.concatenate([base_info, tech_features]).astype(np.float32)
+            obs = np.concatenate([base_info, tech_features])
+        else:
+            # Legacy mode: use external features
+            try:
+                current_features = self.features[self.current_step]
+                if not isinstance(current_features, np.ndarray):
+                    current_features = np.array(current_features, dtype=np.float32)
+                current_features = current_features.flatten().astype(np.float32)
+            except (IndexError, TypeError):
+                current_features = np.zeros(self.features.shape[1], dtype=np.float32)
+            obs = np.concatenate([base_info, current_features])
         
-        # Legacy mode: use external features
-        try:
-            current_features = self.features[self.current_step]
-            if not isinstance(current_features, np.ndarray):
-                current_features = np.array(current_features, dtype=np.float32)
-            current_features = current_features.flatten().astype(np.float32)
-        except (IndexError, TypeError):
-            current_features = np.zeros(self.features.shape[1], dtype=np.float32)
-
-        obs = np.concatenate([base_info, current_features if not self.use_enhanced_features else tech_features])
+        # Add Macro Features (NASDAQ, DJI, TNX log returns)
+        if self.macro_features is not None and self.current_step < len(self.macro_features):
+            macro = self.macro_features[self.current_step]
+            if not isinstance(macro, np.ndarray):
+                macro = np.array(macro, dtype=np.float32)
+            # Scale macro returns (typically -0.03 to +0.03) to ~(-1, 1)
+            macro_scaled = np.clip(macro * 30, -1.0, 1.0)
+            obs = np.concatenate([obs, macro_scaled.flatten()])
+        elif self.n_macro_features > 0:
+            # Pad with zeros if macro data unavailable
+            obs = np.concatenate([obs, np.zeros(self.n_macro_features, dtype=np.float32)])
         
         # Add Noise Injection (Training only)
         if self.observation_noise > 0:
@@ -634,7 +661,8 @@ class PPOTrader:
         ohlcv_df: DataFrame OHLCV untuk enhanced features (opsional, lebih akurat)
     """
     def __init__(self, prices, features=None, initial_investment=10000, log_dir=None,
-                 use_enhanced_features=False, ohlcv_df=None, transaction_fee=0.001, train_noise_level=0.0):
+                 use_enhanced_features=False, ohlcv_df=None, transaction_fee=0.001, 
+                 train_noise_level=0.0, macro_features=None, slippage_range=(0.0, 0.0005)):
         
         self.prices = np.array(prices).flatten()
         self.initial_investment = initial_investment
@@ -642,6 +670,8 @@ class PPOTrader:
         self.ohlcv_df = ohlcv_df
         self.transaction_fee = transaction_fee
         self.train_noise_level = train_noise_level
+        self.macro_features = macro_features
+        self.slippage_range = slippage_range
         
         # Enhanced mode: use signal scoring
         if use_enhanced_features and HAS_FEATURE_ENGINEERING:
@@ -653,7 +683,9 @@ class PPOTrader:
                 use_enhanced_features=True,
                 ohlcv_df=ohlcv_df,
                 transaction_fee=transaction_fee,
-                observation_noise=train_noise_level
+                observation_noise=train_noise_level,
+                macro_features=macro_features,
+                slippage_range=slippage_range
             )
         else:
             # Legacy mode: generate basic features if not provided

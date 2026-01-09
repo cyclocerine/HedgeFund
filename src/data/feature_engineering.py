@@ -684,3 +684,136 @@ def get_feature_engineer(prices: np.ndarray = None,
         TradingFeatureEngineer instance
     """
     return TradingFeatureEngineer(ohlcv_df=ohlcv_df, prices=prices)
+
+
+# =============================================================================
+# GLOBAL MACRO DATA INTEGRATION
+# =============================================================================
+
+def fetch_macro_data(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetch global macro indicators: NASDAQ, Dow Jones, 10-Year Treasury Yield, VIX.
+    
+    Args:
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        
+    Returns:
+        DataFrame with log returns of macro indicators, shifted by 1 day
+        for timezone alignment (US markets close before Asian markets open).
+        
+    Columns:
+        - macro_ixic: NASDAQ log return (shifted)
+        - macro_dji: Dow Jones log return (shifted)
+        - macro_tnx: 10-Year Treasury log return (shifted)
+        - macro_vix: CBOE Volatility Index log return (shifted)
+    """
+    import yfinance as yf
+    
+    # Macro tickers (4 features)
+    macro_tickers = {
+        '^IXIC': 'macro_ixic',   # NASDAQ Composite
+        '^DJI': 'macro_dji',     # Dow Jones Industrial Average
+        '^TNX': 'macro_tnx',     # 10-Year Treasury Yield
+        '^VIX': 'macro_vix'      # CBOE Volatility Index (Fear Gauge)
+    }
+    
+    macro_data = pd.DataFrame()
+    
+    for ticker, col_name in macro_tickers.items():
+        try:
+            data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            
+            # Handle MultiIndex columns
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            
+            # Calculate log returns (stationary transformation)
+            log_returns = np.log(data['Close'] / data['Close'].shift(1))
+            
+            # Shift by 1 day for timezone alignment
+            # US market closes before Asian markets open next day
+            macro_data[col_name] = log_returns.shift(1)
+            
+        except Exception as e:
+            print(f"[WARN] Failed to fetch {ticker}: {e}")
+            # Fill with zeros if fetching fails
+            macro_data[col_name] = 0.0
+    
+    # Fill NaN with forward fill (for different trading calendars)
+    macro_data = macro_data.ffill().fillna(0.0)
+    
+    return macro_data
+
+
+def prepare_macro_features(ohlcv_df: pd.DataFrame, 
+                           start_date: str = None, 
+                           end_date: str = None) -> pd.DataFrame:
+    """
+    Prepare and merge macro features with OHLCV data.
+    
+    Args:
+        ohlcv_df: DataFrame with OHLCV data (must have DatetimeIndex)
+        start_date: Override start date (optional)
+        end_date: Override end date (optional)
+        
+    Returns:
+        DataFrame with original OHLCV + 4 macro features
+    """
+    # Infer dates from DataFrame index if not provided
+    if start_date is None:
+        start_date = ohlcv_df.index.min().strftime('%Y-%m-%d')
+    if end_date is None:
+        end_date = ohlcv_df.index.max().strftime('%Y-%m-%d')
+    
+    # Fetch macro data
+    macro_df = fetch_macro_data(start_date, end_date)
+    
+    # Merge with outer join (different trading calendars)
+    merged = ohlcv_df.join(macro_df, how='left')
+    
+    # Forward fill missing macro data (holidays)
+    for col in ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']:
+        if col in merged.columns:
+            merged[col] = merged[col].ffill().fillna(0.0)
+        else:
+            merged[col] = 0.0
+    
+    return merged
+
+
+def get_macro_regime(macro_features: np.ndarray) -> float:
+    """
+    Calculate macro regime score based on NASDAQ and DJI returns.
+    
+    Args:
+        macro_features: Array of [macro_ixic, macro_dji, macro_tnx]
+        
+    Returns:
+        Regime score: 
+            > 0.5: Risk-On (bullish global sentiment)
+            < 0.5: Risk-Off (bearish global sentiment)
+            = 0.5: Neutral
+    """
+    if len(macro_features) < 3:
+        return 0.5  # Neutral if data unavailable
+    
+    ixic_ret = macro_features[0]
+    dji_ret = macro_features[1]
+    tnx_ret = macro_features[2]
+    
+    # Average equity return (NASDAQ + DJI)
+    equity_sentiment = (ixic_ret + dji_ret) / 2
+    
+    # Treasury yield rising = Risk-Off (money leaving equities)
+    # Treasury yield falling = Risk-On (money entering equities)
+    treasury_signal = -tnx_ret  # Inverted
+    
+    # Combine: 70% equity, 30% treasury
+    raw_score = 0.7 * equity_sentiment + 0.3 * treasury_signal
+    
+    # Normalize to 0-1 range (assuming returns are typically -3% to +3%)
+    normalized = np.clip((raw_score + 0.03) / 0.06, 0.0, 1.0)
+    
+    return float(normalized)
+
