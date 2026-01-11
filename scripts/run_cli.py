@@ -657,9 +657,12 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     return portfolio_values, trades, performance
 
 
-def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0):
+def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0, ticker="UNKNOWN", force_retrain=False, model_dir="saved_models"):
     """Generate trading signals menggunakan PPO agent dengan enhanced features"""
     print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
+    
+    # Model path resolution
+    model_path = os.path.join(model_dir, "ppo", f"{ticker}_enhanced_v2.3.pt")
     
     # Check if enhanced features available
     try:
@@ -712,9 +715,17 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
             initial_investment=initial_investment
         )
     
-    # Train PPO agent
-    ppo_trader.train(episodes=episodes, verbose=True)
-    print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
+    # Load or Train PPO agent
+    if os.path.exists(model_path) and not force_retrain:
+        print_info(f"Loading saved PPO model from {model_path}")
+        ppo_trader.load(model_path)
+        print_success(f"PPO model loaded successfully!")
+    else:
+        # Train PPO agent
+        ppo_trader.train(episodes=episodes, verbose=True)
+        print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
+        # Save trained model
+        ppo_trader.save(model_path)
     
     # Backtest untuk mendapatkan performance
     backtest_results = ppo_trader.backtest()
@@ -794,6 +805,10 @@ def parse_args():
     parser.add_argument("--strategy", default="PPO", choices=["Trend Following", "Mean Reversion", "Predictive", "PPO"], help="Strategi trading")
     parser.add_argument("--optimize", action="store_true", help="Aktifkan optimasi parameter strategi")
     parser.add_argument("--initial-balance", type=float, default=100000000, help="Modal awal untuk backtest")
+    
+    # Model Persistence
+    parser.add_argument("--force-retrain", action="store_true", help="Force retraining model even if saved model exists")
+    parser.add_argument("--model-dir", default="saved_models", help="Directory for saved models (default: saved_models)")
     
     args = parser.parse_args()
     
@@ -953,7 +968,10 @@ def main():
                     initial_investment=int(args.initial_balance),
                     episodes=args.ppo_episodes,
                     ohlcv_df=ohlcv_df,
-                    train_noise_level=args.train_noise
+                    train_noise_level=args.train_noise,
+                    ticker=args.ticker,
+                    force_retrain=args.force_retrain,
+                    model_dir=args.model_dir
                 )
                 
                 # Print PPO backtest results

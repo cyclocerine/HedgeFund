@@ -723,6 +723,39 @@ class PPOAgent:
             'entropy': total_entropy / max(n_updates, 1)
         }
 
+    def save_model(self, path: str):
+        """
+        Save PPO network weights to disk.
+        
+        Args:
+            path: File path to save the model (e.g., 'saved_models/ppo/NVDA.pt')
+        """
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        torch.save({
+            'network_state_dict': self.network.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'state_dim': self.state_dim,
+            'action_dim': self.action_dim,
+        }, path)
+        print(f"[PPO] Model saved to {path}")
+
+    def load_model(self, path: str):
+        """
+        Load PPO network weights from disk.
+        
+        Args:
+            path: File path to load the model from
+        """
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        self.network.load_state_dict(checkpoint['network_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print(f"[PPO] Model loaded from {path}")
+
 
 class PPOTrader:
     """
@@ -976,16 +1009,13 @@ class PPOTrader:
     
     def save(self, path):
         """Save model checkpoint."""
-        torch.save({
-            'network_state_dict': self.agent.network.state_dict(),
-            'optimizer_state_dict': self.agent.optimizer.state_dict(),
-        }, path)
+        self.agent.save_model(path)
+        self.trained = True
     
     def load(self, path):
         """Load model checkpoint."""
-        checkpoint = torch.load(path, map_location=self.agent.device)
-        self.agent.network.load_state_dict(checkpoint['network_state_dict'])
-        self.agent.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.agent.load_model(path)
+        self.trained = True
 
 
 class MultiAssetTradingEnv(gym.Env):
