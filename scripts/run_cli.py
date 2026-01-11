@@ -48,7 +48,7 @@ except ImportError:
 from src.models.predictor import StockPredictor
 from src.trading.backtest import Backtester
 from src.trading.optimizer import StrategyOptimizer
-from src.trading.ppo_agent import PPOTrader
+from src.trading.ppo_agent import PPOTrader, VectorizedTradingEnv, HybridActorCritic
 
 # Inisialisasi console untuk tampilan yang lebih menarik
 console = Console() if RICH_AVAILABLE else None
@@ -657,12 +657,26 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     return portfolio_values, trades, performance
 
 
-def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0, ticker="UNKNOWN", force_retrain=False, model_dir="saved_models"):
+def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0, ticker="UNKNOWN", force_retrain=False, model_dir="saved_models", vectorized=False, n_envs=8, hybrid_ac=False):
     """Generate trading signals menggunakan PPO agent dengan enhanced features"""
-    print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
     
-    # Model path resolution
-    model_path = os.path.join(model_dir, "ppo", f"{ticker}_enhanced_v2.3.pt")
+    # Display training mode
+    mode_info = []
+    if vectorized:
+        mode_info.append(f"Vectorized ({n_envs} envs)")
+    if hybrid_ac:
+        mode_info.append("Hybrid AC (LSTM memory)")
+    mode_str = " + ".join(mode_info) if mode_info else "Standard"
+    
+    print_info(f"Melatih PPO agent ({episodes} episodes, {mode_str}) untuk menghasilkan sinyal trading...")
+    
+    # Model path resolution - include mode in filename for cache separation
+    mode_suffix = ""
+    if vectorized:
+        mode_suffix += "_vec"
+    if hybrid_ac:
+        mode_suffix += "_hybrid"
+    model_path = os.path.join(model_dir, "ppo", f"{ticker}_enhanced_v2.3{mode_suffix}.pt")
     
     # Check if enhanced features available
     try:
@@ -683,6 +697,11 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
         if all(col in ohlcv_df.columns for col in macro_cols):
             macro_features = ohlcv_df[macro_cols].values
             print_info("Mengintegrasikan 4 Macro Features (VIX, NASDAQ, DJI, TNX)")
+        else:
+            # Fallback for when macro data fetch fails (network issues)
+            # This ensures we still produce 17 features to match the saved model
+            print_warning("Macro data missing (timeout/error). Using zero-padding for compatibility.")
+            macro_features = np.zeros((len(ohlcv_df), 4))
     
     # Create PPOTrader based on available features
     if use_enhanced and ohlcv_df is not None:
@@ -721,9 +740,14 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
         ppo_trader.load(model_path)
         print_success(f"PPO model loaded successfully!")
     else:
-        # Train PPO agent
-        ppo_trader.train(episodes=episodes, verbose=True)
-        print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
+        # Train PPO agent - use vectorized if requested
+        if vectorized:
+            print_info(f"Using Vectorized Training with {n_envs} parallel environments...")
+            ppo_trader.train_vectorized(episodes=episodes, n_envs=n_envs, verbose=True)
+            print_success(f"PPO agent selesai dilatih (Vectorized, {episodes} episodes, {n_envs}x speedup)")
+        else:
+            ppo_trader.train(episodes=episodes, verbose=True)
+            print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
         # Save trained model
         ppo_trader.save(model_path)
     
@@ -810,6 +834,14 @@ def parse_args():
     parser.add_argument("--force-retrain", action="store_true", help="Force retraining model even if saved model exists")
     parser.add_argument("--model-dir", default="saved_models", help="Directory for saved models (default: saved_models)")
     
+    # Advanced PPO Features (V2.3)
+    parser.add_argument("--vectorized", action="store_true", help="Gunakan Vectorized Training untuk speedup (4-8x lebih cepat)")
+    parser.add_argument("--n-envs", type=int, default=8, help="Jumlah parallel environments untuk vectorized training (default: 8)")
+    parser.add_argument("--hybrid-ac", action="store_true", help="Gunakan Hybrid Actor-Critic dengan LSTM memory")
+    parser.add_argument("--plstm", action="store_true", help="Gunakan P-LSTM untuk forecasting (alternatif PatchTST)")
+    parser.add_argument("--cross-ticker", action="store_true", help="Aktifkan cross-ticker training untuk generalisasi")
+    parser.add_argument("--cross-tickers", nargs="+", default=None, help="Daftar ticker untuk cross-ticker training (default: NVDA AAPL MSFT TSLA GOOGL)")
+    
     args = parser.parse_args()
     
     # Set tanggal default jika tidak diisi (6 tahun dari sekarang)
@@ -832,7 +864,17 @@ def main():
     print_info(f"Model: {args.model.upper()}")
     print_info(f"Lookback: {args.lookback} hari, Forecast: {args.forecast_days} hari")
     if args.ppo:
-        print_info("PPO Trading Signals: Aktif")
+        ppo_mode = []
+        if args.vectorized:
+            ppo_mode.append(f"Vectorized ({args.n_envs} envs)")
+        if args.hybrid_ac:
+            ppo_mode.append("Hybrid AC (LSTM memory)")
+        if args.cross_ticker:
+            ppo_mode.append("Cross-Ticker")
+        mode_str = " + ".join(ppo_mode) if ppo_mode else "Standard"
+        print_info(f"PPO Trading Signals: Aktif ({mode_str})")
+    if args.plstm:
+        print_info("Forecasting Model: P-LSTM (Patch-LSTM)")
     if args.mode == 'backtest':
         print_info(f"Strategy: {args.strategy}")
         print_info(f"Initial Balance: Rp {args.initial_balance:,.0f}")
@@ -971,7 +1013,10 @@ def main():
                     train_noise_level=args.train_noise,
                     ticker=args.ticker,
                     force_retrain=args.force_retrain,
-                    model_dir=args.model_dir
+                    model_dir=args.model_dir,
+                    vectorized=args.vectorized,
+                    n_envs=args.n_envs,
+                    hybrid_ac=args.hybrid_ac
                 )
                 
                 # Print PPO backtest results

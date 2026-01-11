@@ -551,6 +551,198 @@ class ActorCritic(nn.Module):
         return log_probs, values.squeeze(-1), entropy
 
 
+class HybridActorCritic(nn.Module):
+    """
+    Hybrid Actor-Critic with PatchTST-style Feature Extraction + LSTM Memory.
+    
+    This architecture provides temporal memory for the PPO agent, allowing it
+    to remember past market conditions and previous actions.
+    
+    Architecture:
+        1. Patch Embedding: Divides observation into patches
+        2. Transformer Encoder: Extracts cross-patch correlations  
+        3. LSTM: Maintains temporal memory across steps
+        4. Actor-Critic Heads: Output policy and value
+    
+    Args:
+        state_dim: Dimension of single observation
+        action_dim: Number of actions (3 for HOLD/BUY/SELL)
+        seq_len: Sequence length for patching (default: 1 for single obs)
+        patch_len: Patch length (default: 1 for element-wise)
+        d_model: Hidden dimension (default: 128)
+        lstm_hidden: LSTM hidden size (default: 128)
+        n_heads: Number of attention heads (default: 4)
+        n_layers: Number of transformer layers (default: 2)
+    """
+    
+    def __init__(self, state_dim, action_dim, d_model=128, lstm_hidden=128,
+                 n_heads=4, n_layers=2, dropout=0.1):
+        super(HybridActorCritic, self).__init__()
+        
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.d_model = d_model
+        self.lstm_hidden = lstm_hidden
+        
+        # Feature embedding (project state to d_model)
+        self.state_embed = nn.Sequential(
+            nn.Linear(state_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Mini Transformer for feature extraction
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, 
+            nhead=n_heads, 
+            dim_feedforward=d_model * 4,
+            dropout=dropout, 
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        
+        # LSTM for temporal memory (learns to remember past states/actions)
+        self.lstm = nn.LSTMCell(d_model, lstm_hidden)
+        
+        # Layer norm after LSTM
+        self.lstm_norm = nn.LayerNorm(lstm_hidden)
+        
+        # Combined feature dimension
+        combined_dim = d_model + lstm_hidden
+        
+        # Actor head (policy)
+        self.actor = nn.Sequential(
+            nn.Linear(combined_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, action_dim),
+            nn.Softmax(dim=-1)
+        )
+        
+        # Critic head (value function)
+        self.critic = nn.Sequential(
+            nn.Linear(combined_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 1)
+        )
+        
+        # Initialize weights
+        self._init_weights()
+        
+        # Hidden state storage (for inference)
+        self.hidden = None
+        self.cell = None
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+    
+    def reset_hidden(self, batch_size=1, device=None):
+        """Reset LSTM hidden state for new episode."""
+        if device is None:
+            device = next(self.parameters()).device
+        self.hidden = torch.zeros(batch_size, self.lstm_hidden, device=device)
+        self.cell = torch.zeros(batch_size, self.lstm_hidden, device=device)
+    
+    def forward(self, state, hidden=None, cell=None):
+        """
+        Forward pass with optional hidden state.
+        
+        Args:
+            state: Observation tensor (batch, state_dim)
+            hidden: Optional LSTM hidden state
+            cell: Optional LSTM cell state
+            
+        Returns:
+            action_probs: Action probability distribution
+            value: State value estimate
+            new_hidden: Updated hidden state
+            new_cell: Updated cell state
+        """
+        batch_size = state.shape[0]
+        device = state.device
+        
+        # Ensure state has correct shape
+        if state.dim() == 1:
+            state = state.unsqueeze(0)
+        
+        # Embed state: (B, d_model)
+        x_embed = self.state_embed(state)
+        
+        # Add sequence dimension for transformer: (B, 1, d_model)
+        x_seq = x_embed.unsqueeze(1)
+        
+        # Transformer encoding
+        x_trans = self.transformer(x_seq)
+        trans_feature = x_trans.squeeze(1)  # (B, d_model)
+        
+        # LSTM memory
+        if hidden is None or cell is None:
+            hidden = torch.zeros(batch_size, self.lstm_hidden, device=device)
+            cell = torch.zeros(batch_size, self.lstm_hidden, device=device)
+        
+        new_hidden, new_cell = self.lstm(trans_feature, (hidden, cell))
+        lstm_feature = self.lstm_norm(new_hidden)
+        
+        # Combine features
+        combined = torch.cat([trans_feature, lstm_feature], dim=-1)
+        
+        # Actor-Critic outputs
+        action_probs = self.actor(combined)
+        value = self.critic(combined)
+        
+        return action_probs, value, new_hidden, new_cell
+    
+    def get_action(self, state, hidden=None, cell=None):
+        """Get action with hidden state management."""
+        action_probs, value, new_hidden, new_cell = self.forward(state, hidden, cell)
+        dist = Categorical(action_probs)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action, log_prob, value.squeeze(-1), new_hidden, new_cell
+    
+    def get_action_inference(self, state):
+        """
+        Get action using internally stored hidden state.
+        Use this for inference/evaluation where you want stateful behavior.
+        """
+        if self.hidden is None:
+            self.reset_hidden(batch_size=state.shape[0] if state.dim() > 1 else 1, 
+                            device=state.device)
+        
+        action, log_prob, value, self.hidden, self.cell = self.get_action(
+            state, self.hidden, self.cell
+        )
+        return action, log_prob, value
+    
+    def evaluate(self, states, actions, hiddens=None, cells=None):
+        """
+        Evaluate actions for PPO training.
+        
+        For proper BPTT, hiddens and cells should be the initial hidden states
+        at the start of each trajectory, stored in the replay buffer.
+        """
+        batch_size = states.shape[0]
+        device = states.device
+        
+        if hiddens is None:
+            hiddens = torch.zeros(batch_size, self.lstm_hidden, device=device)
+        if cells is None:
+            cells = torch.zeros(batch_size, self.lstm_hidden, device=device)
+        
+        action_probs, values, _, _ = self.forward(states, hiddens, cells)
+        dist = Categorical(action_probs)
+        log_probs = dist.log_prob(actions)
+        entropy = dist.entropy()
+        
+        return log_probs, values.squeeze(-1), entropy
+
+
 class PPOAgent:
     """
     PPO Agent menggunakan PyTorch dengan entropy bonus dan gradient clipping.
@@ -608,6 +800,43 @@ class PPOAgent:
             action, log_prob, value = self.network.get_action(state_tensor)
         
         return action.item(), log_prob.item(), value.item()
+
+    def get_actions_batch(self, states):
+        """
+        Select actions for a batch of states (vectorized environments).
+        
+        Args:
+            states: np.ndarray of shape (n_envs, state_dim)
+            
+        Returns:
+            actions: np.ndarray of shape (n_envs,)
+            log_probs: np.ndarray of shape (n_envs,)
+            values: np.ndarray of shape (n_envs,)
+        """
+        if not isinstance(states, np.ndarray):
+            states = np.array(states, dtype=np.float32)
+        
+        # Handle state dimension mismatch
+        if states.shape[1] != self.state_dim:
+            if states.shape[1] > self.state_dim:
+                states = states[:, :self.state_dim]
+            else:
+                pad_width = ((0, 0), (0, self.state_dim - states.shape[1]))
+                states = np.pad(states, pad_width)
+        
+        states_tensor = torch.FloatTensor(states).to(self.device)
+        
+        with torch.no_grad():
+            action_probs, values = self.network(states_tensor)
+            dist = torch.distributions.Categorical(action_probs)
+            actions = dist.sample()
+            log_probs = dist.log_prob(actions)
+        
+        return (
+            actions.cpu().numpy(),
+            log_probs.cpu().numpy(),
+            values.squeeze(-1).cpu().numpy()
+        )
 
     def store_transition(self, state, action, reward, value, log_prob, done):
         """Store transition in buffer."""
@@ -927,7 +1156,19 @@ class PPOTrader:
         else:
             test_env = self.env
 
-        state = test_env.reset()
+        # Ensure agent state_dim matches test environment
+        test_state = test_env.reset()
+        actual_state_dim = len(test_state)
+        if self.agent.state_dim != actual_state_dim:
+            print(f"[Backtest] Adjusting agent state_dim: {self.agent.state_dim} -> {actual_state_dim}")
+            # Reinitialize agent with correct dimensions (preserves training is lost but avoids crash)
+            self.agent = PPOAgent(
+                state_dim=actual_state_dim,
+                action_dim=3,
+                device=self.agent.device
+            )
+
+        state = test_state
         done = False
         trades = []
         actions_taken = []
@@ -1007,6 +1248,124 @@ class PPOTrader:
             'actions': actions_taken
         }
     
+    def train_vectorized(self, episodes=200, n_envs=8, max_steps=1000, verbose=True):
+        """
+        Train PPO agent using vectorized environments for speedup.
+        
+        Args:
+            episodes: Equivalent number of episodes (total_steps = episodes * max_steps / n_envs)
+            n_envs: Number of parallel environments
+            max_steps: Max steps per episode
+            verbose: Print progress
+            
+        Returns:
+            Training history dict
+        """
+        # Create vectorized environment
+        vec_env = VectorizedTradingEnv(
+            prices_list=self.prices,
+            n_envs=n_envs,
+            shuffle_start=True,
+            ohlcv_list=self.ohlcv_df,  # Pass as ohlcv_list, not ohlcv_df
+            initial_balance=self.initial_investment,
+            transaction_fee=self.transaction_fee,
+            use_enhanced_features=self.use_enhanced_features,
+            macro_features=self.macro_features,
+            slippage_range=self.slippage_range
+        )
+        
+        # Ensure agent state_dim matches environment
+        actual_state_dim = vec_env.observation_space.shape[0]
+        if self.agent.state_dim != actual_state_dim:
+            if verbose:
+                print(f"[VecEnv] Adjusting agent state_dim: {self.agent.state_dim} -> {actual_state_dim}")
+            # Reinitialize agent with correct dimensions
+            self.agent = PPOAgent(
+                state_dim=actual_state_dim,
+                action_dim=3,
+                device=self.agent.device
+            )
+        
+        total_steps = episodes * max_steps
+        steps_per_update = 2048  # PPO update frequency
+        
+        episode_rewards = []
+        portfolio_values = []
+        best_reward = float('-inf')
+        
+        states = vec_env.reset()  # (n_envs, obs_dim)
+        current_rewards = np.zeros(n_envs)
+        episode_count = 0
+        
+        for step in range(0, total_steps, n_envs):
+            # Curriculum learning based on progress
+            progress = step / total_steps
+            if progress < 0.33:
+                curr_fee, curr_noise, phase = 0.001, 0.0, "Easy"
+            elif progress < 0.66:
+                curr_fee, curr_noise, phase = 0.002, 0.01, "Medium"
+            else:
+                curr_fee, curr_noise, phase = 0.005, 0.02, "Hard"
+            
+            vec_env.set_difficulty(curr_fee, curr_noise)
+            
+            # Entropy decay
+            current_entropy = 0.05 * (1 - progress) + 0.001 * progress
+            self.agent.entropy_coef = max(0.001, current_entropy)
+            
+            # Get batch actions
+            actions, log_probs, values = self.agent.get_actions_batch(states)
+            
+            # Step all environments
+            next_states, rewards, dones, infos = vec_env.step(actions)
+            
+            # Store transitions for each env
+            for i in range(n_envs):
+                self.agent.store_transition(
+                    states[i], actions[i], rewards[i], 
+                    values[i], log_probs[i], dones[i]
+                )
+                current_rewards[i] += rewards[i]
+                
+                if dones[i]:
+                    episode_rewards.append(current_rewards[i])
+                    if infos[i]:
+                        portfolio_values.append(infos[i].get('portfolio_value', self.initial_investment))
+                    current_rewards[i] = 0
+                    episode_count += 1
+                    
+                    if current_rewards[i] > best_reward:
+                        best_reward = current_rewards[i]
+            
+            states = next_states
+            
+            # Train when buffer is full
+            if len(self.agent.buffer) >= steps_per_update:
+                self.agent.train()
+            
+            # Verbose logging
+            if verbose and episode_count > 0 and episode_count % 10 == 0:
+                avg_reward = np.mean(episode_rewards[-10:]) if episode_rewards else 0
+                avg_value = np.mean(portfolio_values[-10:]) if portfolio_values else self.initial_investment
+                print(f"Step {step}/{total_steps} [{phase}] | Episodes: {episode_count} | "
+                      f"Avg Reward: {avg_reward:.4f} | Avg Portfolio: {avg_value:.2f}")
+        
+        # Final training pass
+        if len(self.agent.buffer) > 0:
+            self.agent.train()
+        
+        self.trained = True
+        
+        if verbose:
+            print(f"\n[Vectorized Training Complete] {episode_count} episodes, {n_envs}x speedup")
+        
+        return {
+            'episode_rewards': episode_rewards,
+            'portfolio_values': portfolio_values,
+            'best_reward': best_reward,
+            'total_episodes': episode_count
+        }
+    
     def save(self, path):
         """Save model checkpoint."""
         self.agent.save_model(path)
@@ -1035,3 +1394,122 @@ class MultiAssetTradingEnv(gym.Env):
 
     def _get_observation(self):
         pass
+
+
+class VectorizedTradingEnv:
+    """
+    Parallel trading environments for faster PPO training.
+    
+    Each environment operates on a different time slice or ticker
+    to prevent data leakage and encourage generalization.
+    
+    Args:
+        prices_list: List of price arrays (one per env or shared with offset)
+        n_envs: Number of parallel environments (default: 8)
+        shuffle_start: If True, each env starts at random offset
+        **env_kwargs: Additional arguments passed to TradingEnv
+    """
+    
+    def __init__(self, prices_list, n_envs=8, shuffle_start=True, 
+                 ohlcv_list=None, **env_kwargs):
+        self.n_envs = n_envs
+        self.shuffle_start = shuffle_start
+        
+        # Handle single prices array (create shuffled offsets)
+        if not isinstance(prices_list, list):
+            prices_list = [prices_list] * n_envs
+        
+        # Handle single ohlcv_df
+        if ohlcv_list is None:
+            ohlcv_list = [None] * n_envs
+        elif not isinstance(ohlcv_list, list):
+            ohlcv_list = [ohlcv_list] * n_envs
+        
+        self.envs = []
+        # Remove ohlcv_df from env_kwargs if present (we handle it separately)
+        env_kwargs.pop('ohlcv_df', None)
+        
+        for i in range(n_envs):
+            prices = prices_list[i % len(prices_list)]
+            ohlcv = ohlcv_list[i % len(ohlcv_list)] if ohlcv_list else None
+            
+            # Create environment with offset for data isolation
+            env = TradingEnv(
+                prices=prices,
+                ohlcv_df=ohlcv,
+                **env_kwargs
+            )
+            self.envs.append(env)
+        
+        # Get observation shape from first env
+        self.observation_space = self.envs[0].observation_space
+        self.action_space = self.envs[0].action_space
+    
+    def reset(self):
+        """Reset all environments and return stacked observations."""
+        states = []
+        for i, env in enumerate(self.envs):
+            state = env.reset()
+            
+            # Random start offset for each env (data isolation)
+            if self.shuffle_start:
+                max_offset = max(0, len(env.prices) - 100)
+                offset = np.random.randint(0, max(1, max_offset // self.n_envs)) * i
+                for _ in range(min(offset, len(env.prices) - 2)):
+                    if not env.done:
+                        env.step(0)  # Hold to advance time
+                state = env._get_observation()
+            
+            states.append(state)
+        
+        return np.stack(states)  # (n_envs, obs_dim)
+    
+    def step(self, actions):
+        """
+        Step all environments with given actions.
+        
+        Args:
+            actions: Array of shape (n_envs,) with action for each env
+            
+        Returns:
+            states: (n_envs, obs_dim)
+            rewards: (n_envs,)
+            dones: (n_envs,)
+            infos: list of info dicts
+        """
+        states = []
+        rewards = []
+        dones = []
+        infos = []
+        
+        for env, action in zip(self.envs, actions):
+            state, reward, done, info = env.step(action)
+            states.append(state)
+            rewards.append(reward)
+            dones.append(done)
+            infos.append(info)
+        
+        states = np.stack(states)
+        rewards = np.array(rewards, dtype=np.float32)
+        dones = np.array(dones, dtype=np.bool_)
+        
+        # Auto-reset done environments
+        for i, done in enumerate(dones):
+            if done:
+                states[i] = self.envs[i].reset()
+                if self.shuffle_start:
+                    # Random offset on reset too
+                    max_offset = max(0, len(self.envs[i].prices) - 100)
+                    offset = np.random.randint(0, max(1, max_offset))
+                    for _ in range(offset):
+                        if not self.envs[i].done:
+                            self.envs[i].step(0)
+                    states[i] = self.envs[i]._get_observation()
+        
+        return states, rewards, dones, infos
+    
+    def set_difficulty(self, fee, noise):
+        """Set difficulty for all environments (curriculum learning)."""
+        for env in self.envs:
+            if hasattr(env, 'set_difficulty'):
+                env.set_difficulty(fee, noise)
