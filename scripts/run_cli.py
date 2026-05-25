@@ -771,7 +771,10 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
         
         # Get action probabilities from trained network
         with torch.no_grad():
-            action_probs, _ = ppo_trader.agent.network(state_tensor)
+            if getattr(ppo_trader.agent, 'use_hybrid', False):
+                action_probs, _, _, _ = ppo_trader.agent.network(state_tensor)
+            else:
+                action_probs, _ = ppo_trader.agent.network(state_tensor)
             probs = action_probs.cpu().numpy().flatten()
         
         # probs[0] = HOLD, probs[1] = BUY, probs[2] = SELL
@@ -902,6 +905,8 @@ def main():
                 use_ensemble = args.ensemble or args.model == 'ensemble'
                 if use_ensemble:
                     model_type = 'patchtst'  # Base model for ensemble
+                if args.plstm:
+                    model_type = 'plstm'
                 
                 predictor = StockPredictor(
                     ticker=args.ticker,
@@ -959,6 +964,8 @@ def main():
             use_ensemble = args.ensemble or args.model == 'ensemble'
             if use_ensemble:
                 model_type = 'patchtst'  # Base model for ensemble
+            if args.plstm:
+                model_type = 'plstm'
             
             predictor = StockPredictor(
                 ticker=args.ticker,

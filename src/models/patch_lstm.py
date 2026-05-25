@@ -1,42 +1,86 @@
 """
-P-LSTM (Patch-LSTM) Model
-=========================
+P-LSTM (Patch-LSTM) Model — Enhanced v3.0
+==========================================
 
 A hybrid architecture that combines the patching strategy from PatchTST
 with LSTM for efficient long-sequence processing.
 
+Enhancements (v3.0):
+- Multi-Head Cross-Patch Attention (PatchTST-inspired)
+- Huber Loss for robustness to price spikes
+- Cosine Annealing Warm Restarts scheduler
+- Stochastic Weight Averaging (SWA) for generalization
+- Input noise regularization (anti-overfit)
+- Label smoothing via target noise
+
 Key Benefits:
 - Reduces LSTM unroll steps from L to L/P (where P is patch size)
 - Mitigates vanishing gradient problem on long sequences
-- Adds residual connections for gradient flow
+- Cross-patch attention captures inter-patch correlations
+- SWA produces flatter minima → better generalization
 
-Author: AI Hedge Fund V2.3
+Author: AI Hedge Fund V3.0
 """
 
 import torch
 import torch.nn as nn
 import numpy as np
+import copy
+import math
+
+
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding for patch sequence."""
+    
+    def __init__(self, d_model, max_len=512, dropout=0.1):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if d_model % 2 == 1:
+            pe[:, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        
+        self.register_buffer('pe', pe.unsqueeze(0))
+    
+    def forward(self, x):
+        """x: (batch, seq_len, d_model)"""
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
 
 
 class PatchLSTM(nn.Module):
     """
-    Patch-LSTM model for time series forecasting.
+    Patch-LSTM model with Cross-Patch Attention for time series forecasting.
     
-    Instead of processing one timestep at a time (which causes LSTM to forget),
-    we process patches (e.g., 16 days at once) as single tokens.
+    Architecture:
+        1. Patch Embedding: Linear projection of flattened patches
+        2. Positional Encoding: Sinusoidal position info for patches
+        3. Cross-Patch Attention: Multi-head self-attention across patches
+        4. LSTM: Sequential processing with temporal memory
+        5. Residual Connection + LayerNorm
+        6. Multi-horizon output heads
     
     Args:
         input_dim: Number of features per timestep
         patch_len: Length of each patch (default: 16)
         d_model: Hidden dimension (default: 128)
         lstm_layers: Number of LSTM layers (default: 2)
-        dropout: Dropout rate (default: 0.1)
+        dropout: Dropout rate (default: 0.15)
         bidirectional: Use bidirectional LSTM (default: True)
+        n_heads: Number of attention heads (default: 4)
+        attn_layers: Number of attention layers (default: 1)
         forecast_horizons: List of forecast horizons (default: [1, 7, 14, 30])
     """
     
     def __init__(self, input_dim, patch_len=16, d_model=128, 
-                 lstm_layers=2, dropout=0.1, bidirectional=True,
+                 lstm_layers=2, dropout=0.15, bidirectional=True,
+                 n_heads=4, attn_layers=1,
                  forecast_horizons=[1, 7, 14, 30]):
         super().__init__()
         
@@ -51,6 +95,25 @@ class PatchLSTM(nn.Module):
         
         # Layer Normalization after embedding
         self.embed_norm = nn.LayerNorm(d_model)
+        
+        # Positional Encoding for patch positions
+        self.pos_encoding = PositionalEncoding(d_model, dropout=dropout)
+        
+        # Cross-Patch Multi-Head Attention (PatchTST-inspired)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            batch_first=True,
+            activation='gelu'
+        )
+        self.cross_patch_attn = nn.TransformerEncoder(
+            encoder_layer, num_layers=attn_layers
+        )
+        
+        # Attention output norm
+        self.attn_norm = nn.LayerNorm(d_model)
         
         # LSTM for processing sequence of patches
         self.lstm = nn.LSTM(
@@ -74,25 +137,43 @@ class PatchLSTM(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(dropout)
         
-        # Multi-horizon output heads
+        # Multi-horizon output heads with bottleneck
         self.output_heads = nn.ModuleDict({
             f"horizon_{h}": nn.Sequential(
                 nn.Linear(lstm_out_dim, d_model),
-                nn.ReLU(),
+                nn.GELU(),
                 nn.Dropout(dropout),
-                nn.Linear(d_model, 1)
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Dropout(dropout * 0.5),
+                nn.Linear(d_model // 2, 1)
             ) for h in forecast_horizons
         })
         
         # Single-step prediction head (for backward compatibility)
-        self.single_head = nn.Linear(lstm_out_dim, 1)
+        self.single_head = nn.Sequential(
+            nn.Linear(lstm_out_dim, d_model // 2),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model // 2, 1)
+        )
         
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize weights using Xavier for better training."""
+        """Initialize weights using Xavier for linear layers, orthogonal for LSTM."""
         for name, param in self.named_parameters():
-            if 'weight' in name and param.dim() >= 2:
+            if 'lstm' in name:
+                if 'weight_ih' in name:
+                    nn.init.xavier_uniform_(param)
+                elif 'weight_hh' in name:
+                    nn.init.orthogonal_(param)
+                elif 'bias' in name:
+                    nn.init.zeros_(param)
+                    # Set forget gate bias to 1 (better gradient flow)
+                    n = param.size(0)
+                    param.data[n//4:n//2].fill_(1.0)
+            elif 'weight' in name and param.dim() >= 2:
                 nn.init.xavier_uniform_(param)
             elif 'bias' in name:
                 nn.init.zeros_(param)
@@ -124,17 +205,24 @@ class PatchLSTM(nn.Module):
         x = x[:, :n_patches * self.patch_len, :]
         
         # Reshape to patches: (B, n_patches, patch_len * input_dim)
-        x_patched = x.view(B, n_patches, self.patch_len * D)
+        x_patched = x.reshape(B, n_patches, self.patch_len * D)
         
         # Patch embedding: (B, n_patches, d_model)
         x_embed = self.patch_embed(x_patched)
         x_embed = self.embed_norm(x_embed)
         
+        # Positional encoding
+        x_embed = self.pos_encoding(x_embed)
+        
         # Store for residual connection
         residual = self.residual_proj(x_embed.mean(dim=1))  # Global average pool
         
+        # Cross-Patch Attention: learn inter-patch correlations
+        x_attn = self.cross_patch_attn(x_embed)
+        x_attn = self.attn_norm(x_attn)
+        
         # LSTM processing: (B, n_patches, lstm_out_dim)
-        lstm_out, (h_n, c_n) = self.lstm(x_embed)
+        lstm_out, (h_n, c_n) = self.lstm(x_attn)
         
         # Use last output + residual connection
         out = lstm_out[:, -1, :] + residual
@@ -143,9 +231,12 @@ class PatchLSTM(nn.Module):
         
         # Select output head based on horizon
         if horizon is not None and f"horizon_{horizon}" in self.output_heads:
-            return self.output_heads[f"horizon_{horizon}"](out)
+            pred = self.output_heads[f"horizon_{horizon}"](out)
         else:
-            return self.single_head(out)
+            pred = self.single_head(out)
+            
+        # Add residual from last timestamp, 0-th feature for random walk baseline
+        return pred + x[:, -1, 0:1]
     
     def forward_all_horizons(self, x):
         """
@@ -170,23 +261,29 @@ class PatchLSTM(nn.Module):
         
         # Trim and patch
         x = x[:, :n_patches * self.patch_len, :]
-        x_patched = x.view(B, n_patches, self.patch_len * D)
+        x_patched = x.reshape(B, n_patches, self.patch_len * D)
         
-        # Embed and process
+        # Embed, position encode, attend, LSTM
         x_embed = self.patch_embed(x_patched)
         x_embed = self.embed_norm(x_embed)
+        x_embed = self.pos_encoding(x_embed)
         residual = self.residual_proj(x_embed.mean(dim=1))
         
-        lstm_out, _ = self.lstm(x_embed)
+        x_attn = self.cross_patch_attn(x_embed)
+        x_attn = self.attn_norm(x_attn)
+        
+        lstm_out, _ = self.lstm(x_attn)
         out = lstm_out[:, -1, :] + residual
         out = self.lstm_norm(out)
         out = self.dropout(out)
         
-        # Get all horizon predictions
+        # Select output heads
         predictions = {}
-        for h in self.forecast_horizons:
-            predictions[h] = self.output_heads[f"horizon_{h}"](out)
-        
+        for horizon, head in self.output_heads.items():
+            h_int = int(horizon.split('_')[1])
+            pred = head(out)
+            predictions[h_int] = pred + x[:, -1, 0:1]
+            
         return predictions
 
 
@@ -194,8 +291,12 @@ class PatchLSTMWrapper:
     """
     Wrapper class with training utilities for PatchLSTM.
     
-    Provides fit(), predict(), save(), and load() methods
-    similar to ImprovedPatchTSTWrapper for drop-in replacement.
+    Enhancements (v3.0):
+    - Huber Loss (robust to price spike outliers)
+    - Cosine Annealing Warm Restarts scheduler
+    - Stochastic Weight Averaging (SWA) for better generalization
+    - Input noise regularization during training
+    - Label smoothing via target noise
     """
     
     def __init__(self, input_dim, device=None, progress_callback=None,
@@ -211,16 +312,28 @@ class PatchLSTMWrapper:
             **kwargs
         ).to(self.device)
         
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-3, weight_decay=0.01)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=5
+        # AdamW with decoupled weight decay
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(), lr=1e-3, weight_decay=0.01
         )
-        self.criterion = nn.MSELoss()
+        
+        # Cosine Annealing Warm Restarts (better than ReduceLROnPlateau)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            self.optimizer, T_0=10, T_mult=2, eta_min=1e-6
+        )
+        
+        # Huber Loss — robust to outliers (price spikes)
+        self.criterion = nn.SmoothL1Loss(beta=0.5)
+        
+        # SWA state
+        self.swa_model = None
+        self.swa_start_epoch = None
     
     def fit(self, X_train, y_train, X_val=None, y_val=None, epochs=50,
-            batch_size=32, verbose=1, early_stopping_patience=10, horizon=None):
+            batch_size=32, verbose=1, early_stopping_patience=10, horizon=None,
+            input_noise=0.01, label_noise=0.005, swa_start_pct=0.75):
         """
-        Train the P-LSTM model.
+        Train the P-LSTM model with enhanced regularization.
         
         Args:
             X_train: Training features (N, seq_len, input_dim)
@@ -232,6 +345,9 @@ class PatchLSTMWrapper:
             verbose: Verbosity level (0=silent, 1=progress)
             early_stopping_patience: Epochs to wait before early stopping
             horizon: Specific horizon to train for (if None, trains for single-step)
+            input_noise: Std of Gaussian noise added to inputs during training (anti-overfit)
+            label_noise: Std of Gaussian noise added to targets (label smoothing)
+            swa_start_pct: Fraction of training to start SWA (0.75 = last 25%)
         """
         # Convert to tensors
         X_train = torch.FloatTensor(X_train).to(self.device)
@@ -247,18 +363,31 @@ class PatchLSTMWrapper:
         
         n_batches = (len(X_train) + batch_size - 1) // batch_size
         
+        # SWA setup
+        self.swa_start_epoch = int(epochs * swa_start_pct)
+        swa_count = 0
+        swa_state = None
+        
         for epoch in range(epochs):
             self.model.train()
             total_loss = 0
             
             # Shuffle data
             perm = torch.randperm(len(X_train))
-            X_train = X_train[perm]
-            y_train = y_train[perm]
+            X_shuffled = X_train[perm]
+            y_shuffled = y_train[perm]
             
-            for i in range(0, len(X_train), batch_size):
-                batch_X = X_train[i:i+batch_size]
-                batch_y = y_train[i:i+batch_size]
+            for i in range(0, len(X_shuffled), batch_size):
+                batch_X = X_shuffled[i:i+batch_size]
+                batch_y = y_shuffled[i:i+batch_size]
+                
+                # Input noise regularization (training only)
+                if input_noise > 0:
+                    batch_X = batch_X + torch.randn_like(batch_X) * input_noise
+                
+                # Label smoothing via target noise
+                if label_noise > 0:
+                    batch_y = batch_y + torch.randn_like(batch_y) * label_noise
                 
                 self.optimizer.zero_grad()
                 pred = self.model(batch_X, horizon=horizon)
@@ -271,7 +400,23 @@ class PatchLSTMWrapper:
                 self.optimizer.step()
                 total_loss += loss.item()
             
+            # Step scheduler
+            self.scheduler.step(epoch)
+            
             avg_train_loss = total_loss / n_batches
+            
+            # Stochastic Weight Averaging
+            if epoch >= self.swa_start_epoch:
+                if swa_state is None:
+                    swa_state = copy.deepcopy(self.model.state_dict())
+                    swa_count = 1
+                else:
+                    current_state = self.model.state_dict()
+                    swa_count += 1
+                    for key in swa_state:
+                        swa_state[key] = (
+                            swa_state[key] * (swa_count - 1) + current_state[key]
+                        ) / swa_count
             
             # Validation
             val_loss = None
@@ -281,13 +426,11 @@ class PatchLSTMWrapper:
                     val_pred = self.model(X_val, horizon=horizon)
                     val_loss = self.criterion(val_pred, y_val).item()
                 
-                self.scheduler.step(val_loss)
-                
                 # Early stopping
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     patience_counter = 0
-                    best_state = self.model.state_dict().copy()
+                    best_state = copy.deepcopy(self.model.state_dict())
                 else:
                     patience_counter += 1
                     if patience_counter >= early_stopping_patience:
@@ -297,10 +440,17 @@ class PatchLSTMWrapper:
             
             if verbose and (epoch + 1) % 10 == 0:
                 val_str = f", Val Loss: {val_loss:.6f}" if val_loss else ""
-                print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_str}")
+                lr = self.optimizer.param_groups[0]['lr']
+                swa_str = " [SWA]" if epoch >= self.swa_start_epoch else ""
+                print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_str} | LR: {lr:.2e}{swa_str}")
         
-        # Restore best weights
-        if best_state is not None:
+        # Apply SWA weights if available (better generalization)
+        if swa_state is not None and swa_count > 1:
+            self.model.load_state_dict(swa_state)
+            if verbose:
+                print(f"[P-LSTM] Applied SWA weights (averaged {swa_count} checkpoints)")
+        elif best_state is not None:
+            # Restore best early-stopping weights
             self.model.load_state_dict(best_state)
     
     def predict(self, X, horizon=None, batch_size=1024):
@@ -370,7 +520,7 @@ class PatchLSTMWrapper:
 
 # Quick test
 if __name__ == "__main__":
-    print("Testing P-LSTM...")
+    print("Testing Enhanced P-LSTM v3.0...")
     
     # Create random data
     batch_size = 32
@@ -390,4 +540,12 @@ if __name__ == "__main__":
     all_out = model.forward_all_horizons(X)
     print(f"Multi-horizon outputs: {list(all_out.keys())}")
     
-    print("P-LSTM test passed!")
+    # Test wrapper with training
+    wrapper = PatchLSTMWrapper(input_dim=input_dim)
+    X_np = X.numpy()
+    y_np = np.random.randn(batch_size)
+    wrapper.fit(X_np, y_np, epochs=5, verbose=1)
+    preds = wrapper.predict(X_np)
+    print(f"Predictions shape: {preds.shape}")
+    
+    print("Enhanced P-LSTM v3.0 test passed!")

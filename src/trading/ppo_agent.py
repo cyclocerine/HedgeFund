@@ -745,42 +745,118 @@ class HybridActorCritic(nn.Module):
 
 class PPOAgent:
     """
-    PPO Agent menggunakan PyTorch dengan entropy bonus dan gradient clipping.
+    Enhanced PPO Agent (v3.0) with:
+    - HybridActorCritic network (Transformer + LSTM temporal memory)
+    - Observation Normalization (RunningMeanStd)
+    - Reward Normalization (running statistics)
+    - Value Function Clipping (prevents value divergence)
+    - Separate Actor/Critic Learning Rates
+    - Cosine Entropy Scheduling
     """
     def __init__(
         self,
         state_dim,
         action_dim,
         lr=3e-4,
+        actor_lr=None,
+        critic_lr=None,
         gamma=0.99,
         clip_ratio=0.2,
+        value_clip=0.2,
         batch_size=64,
         epochs=10,
         lam=0.95,
         entropy_coef=0.005,
         value_coef=0.5,
         max_grad_norm=0.5,
+        normalize_obs=True,
+        normalize_rewards=True,
+        use_hybrid_network=True,
         device=None
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.gamma = gamma
         self.clip_ratio = clip_ratio
+        self.value_clip = value_clip
         self.batch_size = batch_size
         self.epochs = epochs
         self.lam = lam
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
+        self.normalize_obs = normalize_obs
+        self.normalize_rewards = normalize_rewards
         
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.network = ActorCritic(state_dim, action_dim).to(self.device)
-        self.optimizer = optim.Adam(self.network.parameters(), lr=lr)
+        # Network selection: HybridActorCritic (Transformer+LSTM) or simple MLP
+        if use_hybrid_network:
+            self.network = HybridActorCritic(state_dim, action_dim).to(self.device)
+        else:
+            self.network = ActorCritic(state_dim, action_dim).to(self.device)
+        self.use_hybrid = use_hybrid_network
+        
+        # Separate Actor/Critic LRs for stable training
+        actor_lr = actor_lr or lr * 0.5   # Actor: slower learning
+        critic_lr = critic_lr or lr * 1.5  # Critic: faster learning
+        
+        actor_params = list(self.network.actor.parameters())
+        critic_params = list(self.network.critic.parameters())
+        
+        # Shared/backbone params go with actor LR
+        shared_params = [p for n, p in self.network.named_parameters() 
+                        if 'actor' not in n and 'critic' not in n]
+        
+        self.optimizer = optim.Adam([
+            {'params': shared_params + actor_params, 'lr': actor_lr},
+            {'params': critic_params, 'lr': critic_lr}
+        ])
+        
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
         
         self.buffer = Buffer()
         self.target_kl = 0.015
+        
+        # Observation Normalization
+        if normalize_obs:
+            self.obs_rms = RunningMeanStd(shape=(state_dim,))
+        else:
+            self.obs_rms = None
+        
+        # Reward Normalization
+        if normalize_rewards:
+            self.ret_rms = RunningMeanStd(shape=())
+            self.running_return = 0.0
+        else:
+            self.ret_rms = None
+    
+    def _normalize_obs(self, obs):
+        """Normalize observation using running statistics."""
+        if self.obs_rms is not None:
+            obs_np = obs if isinstance(obs, np.ndarray) else np.array(obs, dtype=np.float64)
+            if obs_np.ndim == 1:
+                obs_np = obs_np.reshape(1, -1)
+            # Handle dimension mismatch
+            if obs_np.shape[-1] != self.state_dim:
+                if obs_np.shape[-1] > self.state_dim:
+                    obs_np = obs_np[..., :self.state_dim]
+                else:
+                    pad = np.zeros((*obs_np.shape[:-1], self.state_dim - obs_np.shape[-1]))
+                    obs_np = np.concatenate([obs_np, pad], axis=-1)
+            self.obs_rms.update(obs_np)
+            normalized = (obs_np - self.obs_rms.mean) / (np.sqrt(self.obs_rms.var) + 1e-8)
+            normalized = np.clip(normalized, -10.0, 10.0)
+            return normalized.squeeze() if len(normalized) == 1 and normalized.ndim > 1 else normalized
+        return obs
+    
+    def _normalize_reward(self, reward):
+        """Normalize reward using running return statistics."""
+        if self.ret_rms is not None:
+            self.running_return = self.running_return * self.gamma + reward
+            self.ret_rms.update(np.array([self.running_return]))
+            return float(reward / (np.sqrt(self.ret_rms.var) + 1e-8))
+        return reward
 
     def get_action(self, state):
         """Select action based on current state."""
@@ -793,25 +869,23 @@ class PPOAgent:
                     state = state[:self.state_dim]
                 else:
                     state = np.pad(state, (0, self.state_dim - state.shape[0]))
+        
+        # Normalize observation
+        state = np.array(self._normalize_obs(state), dtype=np.float32).flatten()
 
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            action, log_prob, value = self.network.get_action(state_tensor)
+            if self.use_hybrid:
+                action, log_prob, value, _, _ = self.network.get_action(state_tensor)
+            else:
+                action, log_prob, value = self.network.get_action(state_tensor)
         
         return action.item(), log_prob.item(), value.item()
 
     def get_actions_batch(self, states):
         """
         Select actions for a batch of states (vectorized environments).
-        
-        Args:
-            states: np.ndarray of shape (n_envs, state_dim)
-            
-        Returns:
-            actions: np.ndarray of shape (n_envs,)
-            log_probs: np.ndarray of shape (n_envs,)
-            values: np.ndarray of shape (n_envs,)
         """
         if not isinstance(states, np.ndarray):
             states = np.array(states, dtype=np.float32)
@@ -824,10 +898,16 @@ class PPOAgent:
                 pad_width = ((0, 0), (0, self.state_dim - states.shape[1]))
                 states = np.pad(states, pad_width)
         
+        # Normalize observations
+        states = np.array(self._normalize_obs(states), dtype=np.float32)
+        
         states_tensor = torch.FloatTensor(states).to(self.device)
         
         with torch.no_grad():
-            action_probs, values = self.network(states_tensor)
+            if self.use_hybrid:
+                action_probs, values, _, _ = self.network(states_tensor)
+            else:
+                action_probs, values = self.network(states_tensor)
             dist = torch.distributions.Categorical(action_probs)
             actions = dist.sample()
             log_probs = dist.log_prob(actions)
@@ -839,7 +919,13 @@ class PPOAgent:
         )
 
     def store_transition(self, state, action, reward, value, log_prob, done):
-        """Store transition in buffer."""
+        """Store transition in buffer with reward normalization."""
+        # Normalize reward
+        if self.normalize_rewards:
+            reward = self._normalize_reward(reward)
+            if done:
+                self.running_return = 0.0  # Reset for new episode
+        
         self.buffer.states.append(state)
         self.buffer.actions.append(action)
         self.buffer.rewards.append(reward)
@@ -871,15 +957,33 @@ class PPOAgent:
         return returns, advantages
 
     def train(self, batch_size=None):
-        """Train PPO agent."""
+        """Train PPO agent with value clipping."""
         if len(self.buffer) == 0:
             return {}
 
         batch_size = batch_size or self.batch_size
         
-        states = torch.FloatTensor(np.array(self.buffer.states)).to(self.device)
+        # Normalize and prepare states
+        raw_states = np.array(self.buffer.states, dtype=np.float32)
+        # Handle variable state dims by padding/truncating
+        if raw_states.ndim == 2 and raw_states.shape[1] != self.state_dim:
+            if raw_states.shape[1] > self.state_dim:
+                raw_states = raw_states[:, :self.state_dim]
+            else:
+                pad_width = ((0, 0), (0, self.state_dim - raw_states.shape[1]))
+                raw_states = np.pad(raw_states, pad_width)
+        
+        if self.normalize_obs and self.obs_rms is not None:
+            self.obs_rms.update(raw_states)
+            norm_states = (raw_states - self.obs_rms.mean) / (np.sqrt(self.obs_rms.var) + 1e-8)
+            norm_states = np.clip(norm_states, -10.0, 10.0).astype(np.float32)
+        else:
+            norm_states = raw_states
+        
+        states = torch.FloatTensor(norm_states).to(self.device)
         actions = torch.LongTensor(np.array(self.buffer.actions)).to(self.device)
         old_log_probs = torch.FloatTensor(np.array(self.buffer.log_probs)).to(self.device)
+        old_values = torch.FloatTensor(np.array(self.buffer.values)).to(self.device)
 
         returns, advantages = self.calculate_advantages()
         returns = torch.FloatTensor(returns).to(self.device)
@@ -903,20 +1007,25 @@ class PPOAgent:
                 batch_states = states[batch_indices]
                 batch_actions = actions[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
+                batch_old_values = old_values[batch_indices]
                 batch_returns = returns[batch_indices]
                 batch_advantages = advantages[batch_indices]
 
                 # Evaluate current policy
                 log_probs, values, entropy = self.network.evaluate(batch_states, batch_actions)
 
-                # PPO clipped objective
+                # PPO clipped objective (actor)
                 ratio = torch.exp(log_probs - batch_old_log_probs)
                 clipped_ratio = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio)
-                
                 actor_loss = -torch.min(ratio * batch_advantages, clipped_ratio * batch_advantages).mean()
                 
-                # Critic loss
-                critic_loss = nn.functional.mse_loss(values, batch_returns)
+                # Value function clipping (prevents value divergence)
+                values_clipped = batch_old_values + torch.clamp(
+                    values - batch_old_values, -self.value_clip, self.value_clip
+                )
+                critic_loss_unclipped = (values - batch_returns) ** 2
+                critic_loss_clipped = (values_clipped - batch_returns) ** 2
+                critic_loss = 0.5 * torch.max(critic_loss_unclipped, critic_loss_clipped).mean()
                 
                 # Entropy bonus
                 entropy_loss = -entropy.mean()
@@ -952,9 +1061,10 @@ class PPOAgent:
             'entropy': total_entropy / max(n_updates, 1)
         }
 
+
     def save_model(self, path: str):
         """
-        Save PPO network weights to disk.
+        Save PPO network weights and normalization stats to disk.
         
         Args:
             path: File path to save the model (e.g., 'saved_models/ppo/NVDA.pt')
@@ -962,18 +1072,35 @@ class PPOAgent:
         import os
         os.makedirs(os.path.dirname(path), exist_ok=True)
         
-        torch.save({
+        save_dict = {
             'network_state_dict': self.network.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'state_dim': self.state_dim,
             'action_dim': self.action_dim,
-        }, path)
+            'use_hybrid': getattr(self, 'use_hybrid', False),
+        }
+        
+        # Save normalization stats
+        if hasattr(self, 'obs_rms') and self.obs_rms is not None:
+            save_dict['obs_rms'] = {
+                'mean': self.obs_rms.mean,
+                'var': self.obs_rms.var,
+                'count': self.obs_rms.count
+            }
+        if hasattr(self, 'ret_rms') and self.ret_rms is not None:
+            save_dict['ret_rms'] = {
+                'mean': self.ret_rms.mean,
+                'var': self.ret_rms.var,
+                'count': self.ret_rms.count
+            }
+        
+        torch.save(save_dict, path)
         print(f"[PPO] Model saved to {path}")
 
     def load_model(self, path: str):
         """
-        Load PPO network weights from disk.
+        Load PPO network weights and normalization stats from disk.
         
         Args:
             path: File path to load the model from
@@ -983,6 +1110,17 @@ class PPOAgent:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if 'scheduler_state_dict' in checkpoint:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Restore normalization stats
+        if 'obs_rms' in checkpoint and hasattr(self, 'obs_rms') and self.obs_rms is not None:
+            self.obs_rms.mean = checkpoint['obs_rms']['mean']
+            self.obs_rms.var = checkpoint['obs_rms']['var']
+            self.obs_rms.count = checkpoint['obs_rms']['count']
+        if 'ret_rms' in checkpoint and hasattr(self, 'ret_rms') and self.ret_rms is not None:
+            self.ret_rms.mean = checkpoint['ret_rms']['mean']
+            self.ret_rms.var = checkpoint['ret_rms']['var']
+            self.ret_rms.count = checkpoint['ret_rms']['count']
+        
         print(f"[PPO] Model loaded from {path}")
 
 
@@ -1085,15 +1223,15 @@ class PPOTrader:
             if hasattr(self.env, 'set_difficulty'):
                 self.env.set_difficulty(curr_fee, curr_noise)
             
-            # Entropy Decay (Learning stabilization)
+            # Cosine Entropy Scheduling (smoother exploration → exploitation)
             # Start 0.05 (Exploration) -> End 0.001 (Exploitation)
             start_entropy = 0.05
             end_entropy = 0.001
-            decay_rate = 0.99
             
-            # Linear Decay based on progress
+            # Cosine annealing (spends more time in moderate entropy)
+            import math
             progress = ep / episodes
-            current_entropy = start_entropy * (1 - progress) + end_entropy * progress
+            current_entropy = end_entropy + 0.5 * (start_entropy - end_entropy) * (1 + math.cos(math.pi * progress))
             current_entropy = max(end_entropy, current_entropy)
             
             # Update agent entropy
@@ -1160,13 +1298,13 @@ class PPOTrader:
         test_state = test_env.reset()
         actual_state_dim = len(test_state)
         if self.agent.state_dim != actual_state_dim:
-            print(f"[Backtest] Adjusting agent state_dim: {self.agent.state_dim} -> {actual_state_dim}")
-            # Reinitialize agent with correct dimensions (preserves training is lost but avoids crash)
-            self.agent = PPOAgent(
-                state_dim=actual_state_dim,
-                action_dim=3,
-                device=self.agent.device
+            import warnings
+            warnings.warn(
+                f"[Backtest] State dim mismatch: agent={self.agent.state_dim}, env={actual_state_dim}. "
+                f"Padding/truncating observations to match agent. Trained weights preserved."
             )
+            # Do NOT reinitialize — trained weights would be lost.
+            # Instead, the get_action method already handles padding/truncating.
 
         state = test_state
         done = False
@@ -1331,11 +1469,13 @@ class PPOTrader:
                     episode_rewards.append(current_rewards[i])
                     if infos[i]:
                         portfolio_values.append(infos[i].get('portfolio_value', self.initial_investment))
-                    current_rewards[i] = 0
-                    episode_count += 1
                     
+                    # Check best_reward BEFORE resetting (bug fix)
                     if current_rewards[i] > best_reward:
                         best_reward = current_rewards[i]
+                    
+                    current_rewards[i] = 0
+                    episode_count += 1
             
             states = next_states
             
