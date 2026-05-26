@@ -101,6 +101,71 @@ class RiskManager:
         
         return position_size
     
+    def clamp_ppo_action(self, raw_action, current_price, portfolio_value, 
+                          volatility, current_drawdown=0.0):
+        """
+        Hybrid Guardrail: Menyaring aksi PPO kontinu melalui aturan 
+        manajemen risiko makro. PPO tetap punya kebebasan menentukan 
+        arah dan sizing, tapi RiskManager bertindak sebagai Hard Ceiling.
+        
+        Parameters:
+        -----------
+        raw_action : float
+            Aksi mentah dari PPO, range [-1.0, 1.0].
+            Positif = Long, Negatif = Short/Sell.
+        current_price : float
+            Harga aset saat ini.
+        portfolio_value : float
+            Nilai total portofolio saat ini.
+        volatility : float
+            Volatilitas aset (std dev return harian, atau ATR/Price ratio).
+        current_drawdown : float
+            Drawdown portofolio saat ini (0.0 = tidak ada drawdown, 0.15 = 15%).
+            
+        Returns:
+        --------
+        float
+            Aksi yang sudah di-clamp, range [-max_ceiling, +max_ceiling].
+        """
+        # ── 1. Hard Ceiling dari max_position_size ──
+        # max_position_size = batas alokasi per aset (default 20%)
+        max_ceiling = self.max_position_size
+        
+        # ── 2. Volatility Scaling ──
+        # Semakin tinggi volatilitas, semakin ketat batas sizing.
+        # Baseline volatilitas "normal" = 0.02 (2% daily std dev).
+        # Jika vol 2x normal, ceiling dipotong 50%.
+        baseline_vol = 0.02
+        if volatility > 0:
+            vol_ratio = baseline_vol / max(volatility, 1e-8)
+            vol_scaling = min(1.0, vol_ratio)  # Tidak boleh > 1.0
+        else:
+            vol_scaling = 1.0
+        
+        max_ceiling *= vol_scaling
+        
+        # ── 3. Drawdown Circuit Breaker ──
+        # Jika drawdown mendekati/melewati batas max_drawdown,
+        # potong sizing secara agresif.
+        if current_drawdown > self.max_drawdown * 0.5:
+            # Mulai kurangi di 50% dari max_drawdown
+            drawdown_ratio = current_drawdown / self.max_drawdown
+            
+            if drawdown_ratio >= 1.0:
+                # Drawdown sudah melewati batas → sizing minimal
+                max_ceiling *= 0.1  # Potong 90%
+            else:
+                # Kurangi secara linear dari 100% ke 10%
+                scale = 1.0 - (drawdown_ratio - 0.5) * 1.8  # Linear dari 1.0 ke 0.1
+                scale = max(0.1, min(1.0, scale))
+                max_ceiling *= scale
+        
+        # ── 4. Clamp aksi PPO ──
+        # Pertahankan arah (sign) dari PPO, tapi batasi magnitudo.
+        clamped = np.clip(raw_action, -max_ceiling, max_ceiling)
+        
+        return float(clamped)
+    
     def check_stop_loss(self, positions, current_prices):
         """
         Periksa apakah posisi perlu dilikuidasi berdasarkan stop loss

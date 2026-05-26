@@ -772,32 +772,21 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
         # Get action probabilities from trained network
         with torch.no_grad():
             if getattr(ppo_trader.agent, 'use_hybrid', False):
-                action_probs, _, _, _ = ppo_trader.agent.network(state_tensor)
+                mu, std, _, _, _ = ppo_trader.agent.network(state_tensor)
             else:
-                action_probs, _ = ppo_trader.agent.network(state_tensor)
-            probs = action_probs.cpu().numpy().flatten()
+                mu, std, _ = ppo_trader.agent.network(state_tensor)
+            action_value = float(mu.cpu().numpy().flatten()[0])
         
-        # probs[0] = HOLD, probs[1] = BUY, probs[2] = SELL
-        hold_prob = probs[0] if len(probs) > 0 else 0.33
-        buy_prob = probs[1] if len(probs) > 1 else 0.33
-        sell_prob = probs[2] if len(probs) > 2 else 0.33
-        
-        # Determine signal based on highest probability
-        if buy_prob > 0.5:
+        # Determine signal based on continuous action
+        if action_value > 0.05:
             signal_action = 'buy'
-            confidence = buy_prob * 100
-        elif sell_prob > 0.5:
+            confidence = min(action_value * 100, 100.0)
+        elif action_value < -0.05:
             signal_action = 'sell'
-            confidence = sell_prob * 100
-        elif buy_prob > sell_prob and buy_prob > hold_prob:
-            signal_action = 'buy'
-            confidence = buy_prob * 100
-        elif sell_prob > buy_prob and sell_prob > hold_prob:
-            signal_action = 'sell'
-            confidence = sell_prob * 100
+            confidence = min(abs(action_value) * 100, 100.0)
         else:
             signal_action = 'hold'
-            confidence = hold_prob * 100
+            confidence = 50.0
         
         signals.append({
             'action': signal_action,
@@ -814,8 +803,8 @@ def parse_args():
     parser.add_argument("--mode", required=True, choices=["predict", "backtest"], help="Mode operasi: predict atau backtest")
     
     # Parameter opsional
-    parser.add_argument("--model", default="patchtst", choices=["patchtst", "improved_patchtst", "ensemble"], help="Model prediksi: patchtst, improved_patchtst, atau ensemble")
-    parser.add_argument("--ensemble", action="store_true", help="Gunakan ensemble model (PatchTST + BiLSTM + XGBoost)")
+    parser.add_argument("--model", default="plstm", choices=["plstm", "patchtst", "improved_patchtst", "ensemble"], help="Model prediksi: plstm (default), patchtst, improved_patchtst, atau ensemble")
+    parser.add_argument("--ensemble", action="store_true", help="Gunakan ensemble model (PatchTST/PLSTM + BiLSTM + XGBoost)")
     parser.add_argument("--start-date", help="Tanggal awal data (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Tanggal akhir data (YYYY-MM-DD)")
     parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
@@ -876,7 +865,7 @@ def main():
             ppo_mode.append("Cross-Ticker")
         mode_str = " + ".join(ppo_mode) if ppo_mode else "Standard"
         print_info(f"PPO Trading Signals: Aktif ({mode_str})")
-    if args.plstm:
+    if args.plstm or args.model == 'plstm':
         print_info("Forecasting Model: P-LSTM (Patch-LSTM)")
     if args.mode == 'backtest':
         print_info(f"Strategy: {args.strategy}")

@@ -639,10 +639,15 @@ class TradingFeatureEngineer:
             ]
             
         # Add Macro Features if available
-        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
-        if hasattr(self, 'df') and all(col in self.df.columns for col in macro_cols):
+        macro_cols = [
+            'macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix',
+            'macro_usdidr', 'macro_ihsg', 'macro_eido', 'macro_eem', 
+            'macro_oil', 'macro_gold'
+        ]
+        if hasattr(self, 'df'):
              for col in macro_cols:
-                 feature_list.append(self.df[col].values)
+                 if col in self.df.columns:
+                     feature_list.append(self.df[col].values)
         
         features = np.column_stack(feature_list).astype(np.float32)
         
@@ -745,12 +750,18 @@ def fetch_macro_data(start_date: str, end_date: str) -> pd.DataFrame:
     """
     import yfinance as yf
     
-    # Macro tickers (4 features)
+    # Macro tickers (10 features)
     macro_tickers = {
         '^IXIC': 'macro_ixic',   # NASDAQ Composite
         '^DJI': 'macro_dji',     # Dow Jones Industrial Average
         '^TNX': 'macro_tnx',     # 10-Year Treasury Yield
-        '^VIX': 'macro_vix'      # CBOE Volatility Index (Fear Gauge)
+        '^VIX': 'macro_vix',     # CBOE Volatility Index (Fear Gauge)
+        'USDIDR=X': 'macro_usdidr',  # USD/IDR Exchange Rate
+        '^JKSE': 'macro_ihsg',       # Jakarta Composite Index
+        'EIDO': 'macro_eido',        # iShares MSCI Indonesia ETF
+        'EEM': 'macro_eem',          # MSCI Emerging Markets ETF
+        'CL=F': 'macro_oil',         # Crude Oil WTI
+        'GC=F': 'macro_gold'         # Gold Futures
     }
     
     macro_data = pd.DataFrame()
@@ -808,7 +819,12 @@ def prepare_macro_features(ohlcv_df: pd.DataFrame,
     merged = ohlcv_df.join(macro_df, how='left')
     
     # Forward fill missing macro data (holidays)
-    for col in ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']:
+    macro_cols = [
+        'macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix',
+        'macro_usdidr', 'macro_ihsg', 'macro_eido', 'macro_eem', 
+        'macro_oil', 'macro_gold'
+    ]
+    for col in macro_cols:
         if col in merged.columns:
             merged[col] = merged[col].ffill().fillna(0.0)
         else:

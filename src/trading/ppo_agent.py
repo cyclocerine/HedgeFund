@@ -19,6 +19,9 @@ from torch.distributions import Categorical
 import gymnasium as gym
 from gymnasium import spaces
 
+# Import RiskManager for Hybrid Guardrail
+from src.trading.risk_manager import RiskManager
+
 # Import feature engineering (optional, for enhanced mode)
 try:
     from src.data.feature_engineering import TradingFeatureEngineer, prepare_ppo_features
@@ -103,6 +106,16 @@ class TradingEnv(gym.Env):
         self.ohlcv_df = ohlcv_df
         self.observation_noise = observation_noise
         
+        # ── Hybrid Guardrail: RiskManager as Hard Ceiling ──
+        self.risk_manager = RiskManager(
+            max_drawdown=0.15,           # Circuit breaker mulai aktif di 7.5% DD
+            max_position_size=0.50,      # Hard ceiling 50% kapital per aksi
+            stop_loss=0.05,
+            trailing_stop=0.03,
+            max_capital_per_trade=0.50
+        )
+        self.risk_manager.peak_value = initial_balance
+        
         # Global Macro Features (NASDAQ, DJI, TNX, VIX log returns)
         # Global Macro Features (NASDAQ, DJI, TNX, VIX log returns)
         self.macro_features = macro_features  # Shape: (n_steps, 4)
@@ -180,8 +193,13 @@ class TradingEnv(gym.Env):
             dtype=np.float32
         )
 
-        # Actions: 0 = hold, 1 = buy, 2 = sell
-        self.action_space = spaces.Discrete(3)
+        # Actions: Continuous from -1.0 (Full Short/Sell) to 1.0 (Full Long)
+        self.action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(1,),
+            dtype=np.float32
+        )
 
         self.reset()
 
@@ -234,64 +252,87 @@ class TradingEnv(gym.Env):
                     self.stop_loss_price = potential_new_sl
 
         # ---------------------------------------------------------
-        # 2. REGIME FILTER (Trend Filter) - RESTORED FOR ROBUSTNESS
+        # 3. ACTION EXECUTION (CONTINUOUS) + HYBRID GUARDRAIL
         # ---------------------------------------------------------
-        # Filter Buy (Action 1) if Price < EMA 200 (Downtrend)
-        is_uptrend = current_price > self.ema200[self.current_step]
-        if action == 1 and not is_uptrend:
-            action = 0  # Force Hold/Skip Buy
+        # action is a float in [-1.0, 1.0]
+        action_value = float(action[0]) if isinstance(action, (np.ndarray, list)) else float(action)
 
         # ---------------------------------------------------------
-        # 3. ACTION EXECUTION
+        # 2. REGIME FILTER (Trend Filter) - RESTORED FOR ROBUSTNESS
         # ---------------------------------------------------------
-        if action == 1:  # Buy
+        # Filter Buy (Action > 0) if Price < EMA 200 (Downtrend)
+        is_uptrend = current_price > self.ema200[self.current_step]
+        if action_value > 0 and not is_uptrend:
+            action_value = 0.0  # Force Hold/Skip Buy
+        
+        # ── HYBRID GUARDRAIL: Clamp aksi PPO via RiskManager ──
+        portfolio_value = self.balance + self.shares * current_price
+        vol_proxy = current_atr / current_price if current_price > 0 else 0.02
+        
+        # Hitung drawdown saat ini
+        if portfolio_value > self.risk_manager.peak_value:
+            self.risk_manager.peak_value = portfolio_value
+        current_drawdown = (self.risk_manager.peak_value - portfolio_value) / self.risk_manager.peak_value if self.risk_manager.peak_value > 0 else 0.0
+        
+        # Clamp! PPO boleh usul 0.9, tapi RiskManager bisa potong jadi 0.5
+        action_value = self.risk_manager.clamp_ppo_action(
+            raw_action=action_value,
+            current_price=current_price,
+            portfolio_value=portfolio_value,
+            volatility=vol_proxy,
+            current_drawdown=current_drawdown
+        )
+        
+        # Determine discrete intent and size
+        if action_value > 0.05:
+            intent = 'BUY'
+            position_size = min(1.0, action_value)
+        elif action_value < -0.05:
+            intent = 'SELL'
+            position_size = min(1.0, abs(action_value))
+        else:
+            intent = 'HOLD'
+            position_size = 0.0
+
+        if intent == 'BUY':
             if self.balance > 0:
-                # Position Sizing (Fixed Risk 1-2%)
-                risk_amount = self.balance * self.risk_per_trade  # e.g., 2% of balance
-                stop_loss_dist = current_atr * self.atr_multiplier
+                # Position Sizing based on AI continuous output (0% to 100% of balance)
+                capital_to_use = self.balance * position_size
                 
-                if stop_loss_dist > 0:
-                    shares_to_buy = risk_amount / stop_loss_dist
+                # Slippage Simulation
+                if hasattr(self, 'atr'):
+                    vol_ratio = current_atr / current_price
+                    slippage = self.slippage_range[0] + vol_ratio * 0.1
+                    slippage = min(slippage, self.slippage_range[1])
                 else:
-                    shares_to_buy = 0
+                    slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
                 
-                # Cap at available cash (cannot borrow)
-                max_shares_balance = self.balance / (current_price * (1 + self.transaction_fee))
-                shares_to_buy = min(shares_to_buy, max_shares_balance)
+                execution_price = current_price * (1 + slippage)
+                
+                # Calculate shares directly based on capital requested
+                shares_to_buy = capital_to_use / (execution_price * (1 + self.transaction_fee))
                 
                 if shares_to_buy > 0:
-                    # Slippage Simulation (Volatility Aware)
-                    # Base slippage + Volatility penalty
-                    # Example: 0.0001 + (ATR/Price * 0.1)
-                    if hasattr(self, 'atr'):
-                        vol_ratio = current_atr / current_price
-                        slippage = self.slippage_range[0] + vol_ratio * 0.1
-                        slippage = min(slippage, self.slippage_range[1]) # Cap at max slippage
-                    else:
-                         slippage = np.random.uniform(self.slippage_range[0], self.slippage_range[1])
-                    
-                    execution_price = current_price * (1 + slippage)
-                    
                     cost = shares_to_buy * execution_price * (1 + self.transaction_fee)
                     
                     if self.shares > 0:
                         # Averaging Up/Down
                         self.avg_entry_price = (self.shares * self.avg_entry_price + shares_to_buy * execution_price) / (self.shares + shares_to_buy)
-                        # On scaling in, maybe adjust SL? Keep existing SL or move it up?
-                        # For safety, let's keep the tighter of existing vs new calculation
+                        stop_loss_dist = current_atr * self.atr_multiplier
                         new_sl = current_price - stop_loss_dist
                         self.stop_loss_price = max(self.stop_loss_price, new_sl)
                     else:
                         # New Position
                         self.avg_entry_price = execution_price
+                        stop_loss_dist = current_atr * self.atr_multiplier
                         self.stop_loss_price = current_price - stop_loss_dist
 
                     self.shares += shares_to_buy
                     self.balance -= cost
 
-        elif action == 2:  # Sell
+        elif intent == 'SELL':
             if self.shares > 0:
-                # Slippage Simulation (Sell at worse price) (Volatility Aware)
+                # Slippage Simulation
                 if hasattr(self, 'atr'):
                     vol_ratio = current_atr / current_price
                     slippage = self.slippage_range[0] + vol_ratio * 0.1
@@ -301,11 +342,17 @@ class TradingEnv(gym.Env):
                     
                 execution_price = current_price * (1 - slippage)
                 
-                sell_value = self.shares * execution_price * (1 - self.transaction_fee)
+                # AI Decides how much of the position to sell (e.g. 0.5 means sell 50% of holding)
+                shares_to_sell = self.shares * position_size
+                
+                sell_value = shares_to_sell * execution_price * (1 - self.transaction_fee)
                 self.balance += sell_value
-                self.shares = 0
-                self.avg_entry_price = 0
-                self.stop_loss_price = 0.0 # Reset SL
+                self.shares -= shares_to_sell
+                
+                if self.shares < 1e-4: # Account for float inaccuracies
+                    self.shares = 0
+                    self.avg_entry_price = 0
+                    self.stop_loss_price = 0.0 # Reset SL
 
         # Move to next step
         self.current_step += 1
@@ -355,9 +402,27 @@ class TradingEnv(gym.Env):
         # Scale DSR to be meaningful (DSR is typically small)
         reward = np.clip(dsr_reward, -5.0, 5.0)
         
-        # Explicit Transaction Penalty (Still needed to discourage churning)
-        if action != 0 and self.shares != shares_before_action: # Only if actually traded
-             reward -= self.transaction_fee * 5
+        # Cek apakah transaksi BENAR-BENAR terjadi (bukan sekadar niat palsu)
+        trade_executed = (self.shares != shares_before_action)
+
+        # Invalid Action Penalty (Hukum agen yang spam SELL saat kosong atau BUY saat penuh)
+        if not trade_executed:
+            if action_value < -0.05 and self.shares == 0:
+                reward -= 0.1  # Heavy penalty for spamming fake SELLs
+            elif action_value > 0.05 and self.balance < current_price:
+                reward -= 0.1  # Heavy penalty for spamming fake BUYs
+            else:
+                # Agent chosed to HOLD (action_value between -0.05 and 0.05)
+                if self.shares == 0:
+                    reward -= 0.005  # Tiny opportunity cost for staying out of market entirely
+                else:
+                    reward += 0.01  # Small bonus for patiently holding an active position
+        else:
+            # Trade executed
+            reward -= self.transaction_fee * abs(action_value)
+            ratio = new_portfolio_value / prev_portfolio_value
+            if ratio > 1.0:
+                reward += 0.1 # Bonus jika portfolio naik saat trade
              
         # Stop Loss Penalty (Nudge)
         if forced_sell:
@@ -366,12 +431,6 @@ class TradingEnv(gym.Env):
         # Drawdown Penalty (Secondary objective)
         delta_drawdown = max(0, drawdown - self.prev_drawdown)
         reward -= (delta_drawdown * 5)
-            
-        # Activity Reward (Motivation to Trade)
-        # Bonus for taking action AND being profitable
-        ratio = new_portfolio_value / prev_portfolio_value
-        if action != 0 and ratio > 1.0:
-            reward += 0.05 
             
         # B. DIFFERENTIAL DRAWDOWN PENALTY (Optional, kept small)
         # Keeping it but relying mostly on Log-Utility
@@ -506,13 +565,14 @@ class ActorCritic(nn.Module):
             nn.ReLU()
         )
         
-        # Actor head
-        self.actor = nn.Sequential(
+        # Actor head (Continuous)
+        self.actor_mu = nn.Sequential(
             nn.Linear(hidden_dim, 128),
             nn.ReLU(),
             nn.Linear(128, action_dim),
-            nn.Softmax(dim=-1)
+            nn.Tanh()
         )
+        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
         
         # Critic head
         self.critic = nn.Sequential(
@@ -532,22 +592,32 @@ class ActorCritic(nn.Module):
     
     def forward(self, state):
         shared_out = self.shared(state)
-        action_probs = self.actor(shared_out)
+        mu = self.actor_mu(shared_out)
+        # Clamp logstd to prevent exploration collapse (min std ~ 0.135)
+        logstd_clamped = torch.clamp(self.actor_logstd, min=-2.0, max=1.0)
+        std = logstd_clamped.exp().expand_as(mu)
         value = self.critic(shared_out)
-        return action_probs, value
+        return mu, std, value
     
     def get_action(self, state):
-        action_probs, value = self.forward(state)
-        dist = Categorical(action_probs)
+        mu, std, value = self.forward(state)
+        from torch.distributions import Normal
+        dist = Normal(mu, std)
         action = dist.sample()
-        log_prob = dist.log_prob(action)
+        log_prob = dist.log_prob(action).sum(dim=-1)
         return action, log_prob, value.squeeze(-1)
     
     def evaluate(self, states, actions):
-        action_probs, values = self.forward(states)
-        dist = Categorical(action_probs)
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy()
+        mu, std, values = self.forward(states)
+        from torch.distributions import Normal
+        dist = Normal(mu, std)
+        
+        # Ensure actions shape matches
+        if actions.dim() == 1:
+            actions = actions.unsqueeze(-1)
+            
+        log_probs = dist.log_prob(actions).sum(dim=-1)
+        entropy = dist.entropy().sum(dim=-1)
         return log_probs, values.squeeze(-1), entropy
 
 
@@ -611,14 +681,15 @@ class HybridActorCritic(nn.Module):
         # Combined feature dimension
         combined_dim = d_model + lstm_hidden
         
-        # Actor head (policy)
-        self.actor = nn.Sequential(
+        # Actor head (policy) - Continuous
+        self.actor_mu = nn.Sequential(
             nn.Linear(combined_dim, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, action_dim),
-            nn.Softmax(dim=-1)
+            nn.Tanh()
         )
+        self.actor_logstd = nn.Parameter(torch.zeros(1, action_dim))
         
         # Critic head (value function)
         self.critic = nn.Sequential(
@@ -659,7 +730,8 @@ class HybridActorCritic(nn.Module):
             cell: Optional LSTM cell state
             
         Returns:
-            action_probs: Action probability distribution
+            mu: Action mean
+            std: Action standard deviation
             value: State value estimate
             new_hidden: Updated hidden state
             new_cell: Updated cell state
@@ -693,17 +765,21 @@ class HybridActorCritic(nn.Module):
         combined = torch.cat([trans_feature, lstm_feature], dim=-1)
         
         # Actor-Critic outputs
-        action_probs = self.actor(combined)
+        mu = self.actor_mu(combined)
+        # Clamp logstd to prevent exploration collapse (min std ~ 0.135)
+        logstd_clamped = torch.clamp(self.actor_logstd, min=-2.0, max=1.0)
+        std = logstd_clamped.exp().expand_as(mu)
         value = self.critic(combined)
         
-        return action_probs, value, new_hidden, new_cell
+        return mu, std, value, new_hidden, new_cell
     
     def get_action(self, state, hidden=None, cell=None):
         """Get action with hidden state management."""
-        action_probs, value, new_hidden, new_cell = self.forward(state, hidden, cell)
-        dist = Categorical(action_probs)
+        mu, std, value, new_hidden, new_cell = self.forward(state, hidden, cell)
+        from torch.distributions import Normal
+        dist = Normal(mu, std)
         action = dist.sample()
-        log_prob = dist.log_prob(action)
+        log_prob = dist.log_prob(action).sum(dim=-1)
         return action, log_prob, value.squeeze(-1), new_hidden, new_cell
     
     def get_action_inference(self, state):
@@ -735,10 +811,15 @@ class HybridActorCritic(nn.Module):
         if cells is None:
             cells = torch.zeros(batch_size, self.lstm_hidden, device=device)
         
-        action_probs, values, _, _ = self.forward(states, hiddens, cells)
-        dist = Categorical(action_probs)
-        log_probs = dist.log_prob(actions)
-        entropy = dist.entropy()
+        mu, std, values, _, _ = self.forward(states, hiddens, cells)
+        from torch.distributions import Normal
+        dist = Normal(mu, std)
+        
+        if actions.dim() == 1:
+            actions = actions.unsqueeze(-1)
+            
+        log_probs = dist.log_prob(actions).sum(dim=-1)
+        entropy = dist.entropy().sum(dim=-1)
         
         return log_probs, values.squeeze(-1), entropy
 
@@ -801,7 +882,7 @@ class PPOAgent:
         actor_lr = actor_lr or lr * 0.5   # Actor: slower learning
         critic_lr = critic_lr or lr * 1.5  # Critic: faster learning
         
-        actor_params = list(self.network.actor.parameters())
+        actor_params = list(self.network.actor_mu.parameters()) + [self.network.actor_logstd]
         critic_params = list(self.network.critic.parameters())
         
         # Shared/backbone params go with actor LR
@@ -905,12 +986,13 @@ class PPOAgent:
         
         with torch.no_grad():
             if self.use_hybrid:
-                action_probs, values, _, _ = self.network(states_tensor)
+                mu, std, values, _, _ = self.network(states_tensor)
             else:
-                action_probs, values = self.network(states_tensor)
-            dist = torch.distributions.Categorical(action_probs)
+                mu, std, values = self.network(states_tensor)
+            from torch.distributions import Normal
+            dist = Normal(mu, std)
             actions = dist.sample()
-            log_probs = dist.log_prob(actions)
+            log_probs = dist.log_prob(actions).sum(dim=-1)
         
         return (
             actions.cpu().numpy(),
@@ -981,7 +1063,7 @@ class PPOAgent:
             norm_states = raw_states
         
         states = torch.FloatTensor(norm_states).to(self.device)
-        actions = torch.LongTensor(np.array(self.buffer.actions)).to(self.device)
+        actions = torch.FloatTensor(np.array(self.buffer.actions)).to(self.device)
         old_log_probs = torch.FloatTensor(np.array(self.buffer.log_probs)).to(self.device)
         old_values = torch.FloatTensor(np.array(self.buffer.values)).to(self.device)
 
@@ -1181,14 +1263,20 @@ class PPOTrader:
             self.env = TradingEnv(self.prices, features, initial_investment)
 
         state_dim = self.env.observation_space.shape[0]
-        action_dim = self.env.action_space.n
+        
+        # Check if action_space is Box or Discrete
+        if hasattr(self.env.action_space, 'n'):
+            action_dim = self.env.action_space.n
+        else:
+            action_dim = self.env.action_space.shape[0]
 
         self.agent = PPOAgent(
             state_dim, 
             action_dim,
             entropy_coef=0.05,  # Increased from 0.02 to encourage exploration
             epochs=8,
-            lr=3e-4  # Explicit LR
+            lr=3e-4,  # Explicit LR
+            batch_size=256  # [PERFORMA GPU] Naikkan batch size untuk memaksimalkan CUDA cores
         )
         self.trained = False
         self.log_dir = log_dir
@@ -1322,7 +1410,7 @@ class PPOTrader:
             next_state, reward, done, info = test_env.step(action)
 
             # Record trades
-            if action == 1 and info['shares'] > current_shares:
+            if info['shares'] > current_shares:
                 trades.append({
                     'day': current_step,
                     'type': 'BUY',
@@ -1330,7 +1418,7 @@ class PPOTrader:
                     'shares': info['shares'] - current_shares,
                     'value': (info['shares'] - current_shares) * current_price
                 })
-            elif action == 2 and info['shares'] < current_shares:
+            elif info['shares'] < current_shares:
                 trades.append({
                     'day': current_step,
                     'type': 'SELL',
@@ -1405,6 +1493,7 @@ class PPOTrader:
             n_envs=n_envs,
             shuffle_start=True,
             ohlcv_list=self.ohlcv_df,  # Pass as ohlcv_list, not ohlcv_df
+            features=self.features,  # Harus bernama 'features' agar terbaca oleh TradingEnv
             initial_balance=self.initial_investment,
             transaction_fee=self.transaction_fee,
             use_enhanced_features=self.use_enhanced_features,
@@ -1417,11 +1506,15 @@ class PPOTrader:
         if self.agent.state_dim != actual_state_dim:
             if verbose:
                 print(f"[VecEnv] Adjusting agent state_dim: {self.agent.state_dim} -> {actual_state_dim}")
-            # Reinitialize agent with correct dimensions
+            # Reinitialize agent with correct dimensions and preserved configs
+            action_dim = vec_env.action_space.shape[0] if hasattr(vec_env.action_space, 'shape') else 3
             self.agent = PPOAgent(
                 state_dim=actual_state_dim,
-                action_dim=3,
-                device=self.agent.device
+                action_dim=action_dim,
+                device=self.agent.device,
+                batch_size=getattr(self.agent, 'batch_size', 256),
+                entropy_coef=getattr(self.agent, 'entropy_coef', 0.05),
+                lr=3e-4
             )
         
         total_steps = episodes * max_steps

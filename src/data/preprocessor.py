@@ -129,7 +129,9 @@ class DataPreprocessor:
                 'EMA_9', 'EMA_21', 'EMA_55', 'RSI', 'MACD',
                 'Signal_Line', 'MACD_Histogram', 'ADX',
                 'Volume_Ratio', 'Momentum', 'ROC',
-                'macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix'
+                'macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix',
+                'macro_usdidr', 'macro_ihsg', 'macro_eido', 'macro_eem',
+                'macro_oil', 'macro_gold'
             ]
             
             # Pastikan semua kolom ada

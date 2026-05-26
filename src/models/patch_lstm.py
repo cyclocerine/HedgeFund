@@ -90,8 +90,20 @@ class PatchLSTM(nn.Module):
         self.bidirectional = bidirectional
         self.forecast_horizons = forecast_horizons
         
-        # Patch Embedding: Linear projection of flattened patch
-        self.patch_embed = nn.Linear(patch_len * input_dim, d_model)
+        # LSTM processes raw sequence first
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=d_model,
+            num_layers=lstm_layers,
+            batch_first=True,
+            dropout=dropout if lstm_layers > 1 else 0,
+            bidirectional=bidirectional
+        )
+        
+        lstm_out_dim = d_model * 2 if bidirectional else d_model
+        
+        # Patch Embedding: Linear projection of flattened patched LSTM outputs
+        self.patch_embed = nn.Linear(patch_len * lstm_out_dim, d_model)
         
         # Layer Normalization after embedding
         self.embed_norm = nn.LayerNorm(d_model)
@@ -115,32 +127,13 @@ class PatchLSTM(nn.Module):
         # Attention output norm
         self.attn_norm = nn.LayerNorm(d_model)
         
-        # LSTM for processing sequence of patches
-        self.lstm = nn.LSTM(
-            input_size=d_model,
-            hidden_size=d_model,
-            num_layers=lstm_layers,
-            batch_first=True,
-            dropout=dropout if lstm_layers > 1 else 0,
-            bidirectional=bidirectional
-        )
-        
-        # Output dimension (2x for bidirectional)
-        lstm_out_dim = d_model * 2 if bidirectional else d_model
-        
-        # Residual projection (if dimensions differ)
-        self.residual_proj = nn.Linear(d_model, lstm_out_dim) if bidirectional else nn.Identity()
-        
-        # Layer norm after LSTM
-        self.lstm_norm = nn.LayerNorm(lstm_out_dim)
-        
         # Dropout
         self.dropout = nn.Dropout(dropout)
         
         # Multi-horizon output heads with bottleneck
         self.output_heads = nn.ModuleDict({
             f"horizon_{h}": nn.Sequential(
-                nn.Linear(lstm_out_dim, d_model),
+                nn.Linear(d_model, d_model),
                 nn.GELU(),
                 nn.Dropout(dropout),
                 nn.Linear(d_model, d_model // 2),
@@ -152,7 +145,7 @@ class PatchLSTM(nn.Module):
         
         # Single-step prediction head (for backward compatibility)
         self.single_head = nn.Sequential(
-            nn.Linear(lstm_out_dim, d_model // 2),
+            nn.Linear(d_model, d_model // 2),
             nn.GELU(),
             nn.Dropout(dropout * 0.5),
             nn.Linear(d_model // 2, 1)
@@ -200,12 +193,19 @@ class PatchLSTM(nn.Module):
             x = torch.nn.functional.pad(x, (0, 0, 0, pad_len))
             n_patches = 1
             L = self.patch_len
+        elif L % self.patch_len != 0:
+            # Trim to complete patches before LSTM
+            x = x[:, :n_patches * self.patch_len, :]
+            L = n_patches * self.patch_len
+        else:
+            x = x[:, :n_patches * self.patch_len, :]
         
-        # Trim to complete patches
-        x = x[:, :n_patches * self.patch_len, :]
+        # LSTM processing first: (B, L, lstm_out_dim)
+        lstm_out, _ = self.lstm(x)
+        lstm_out_dim = lstm_out.shape[-1]
         
-        # Reshape to patches: (B, n_patches, patch_len * input_dim)
-        x_patched = x.reshape(B, n_patches, self.patch_len * D)
+        # Reshape to patches: (B, n_patches, patch_len * lstm_out_dim)
+        x_patched = lstm_out.reshape(B, n_patches, self.patch_len * lstm_out_dim)
         
         # Patch embedding: (B, n_patches, d_model)
         x_embed = self.patch_embed(x_patched)
@@ -214,19 +214,12 @@ class PatchLSTM(nn.Module):
         # Positional encoding
         x_embed = self.pos_encoding(x_embed)
         
-        # Store for residual connection
-        residual = self.residual_proj(x_embed.mean(dim=1))  # Global average pool
-        
         # Cross-Patch Attention: learn inter-patch correlations
         x_attn = self.cross_patch_attn(x_embed)
         x_attn = self.attn_norm(x_attn)
         
-        # LSTM processing: (B, n_patches, lstm_out_dim)
-        lstm_out, (h_n, c_n) = self.lstm(x_attn)
-        
-        # Use last output + residual connection
-        out = lstm_out[:, -1, :] + residual
-        out = self.lstm_norm(out)
+        # Use last output from attention
+        out = x_attn[:, -1, :]
         out = self.dropout(out)
         
         # Select output head based on horizon
@@ -258,23 +251,28 @@ class PatchLSTM(nn.Module):
             x = torch.nn.functional.pad(x, (0, 0, 0, pad_len))
             n_patches = 1
             L = self.patch_len
+        elif L % self.patch_len != 0:
+            x = x[:, :n_patches * self.patch_len, :]
+            L = n_patches * self.patch_len
+        else:
+            x = x[:, :n_patches * self.patch_len, :]
         
-        # Trim and patch
-        x = x[:, :n_patches * self.patch_len, :]
-        x_patched = x.reshape(B, n_patches, self.patch_len * D)
+        # LSTM processing first
+        lstm_out, _ = self.lstm(x)
+        lstm_out_dim = lstm_out.shape[-1]
         
-        # Embed, position encode, attend, LSTM
+        # Reshape to patches
+        x_patched = lstm_out.reshape(B, n_patches, self.patch_len * lstm_out_dim)
+        
+        # Embed, position encode, attend
         x_embed = self.patch_embed(x_patched)
         x_embed = self.embed_norm(x_embed)
         x_embed = self.pos_encoding(x_embed)
-        residual = self.residual_proj(x_embed.mean(dim=1))
         
         x_attn = self.cross_patch_attn(x_embed)
         x_attn = self.attn_norm(x_attn)
         
-        lstm_out, _ = self.lstm(x_attn)
-        out = lstm_out[:, -1, :] + residual
-        out = self.lstm_norm(out)
+        out = x_attn[:, -1, :]
         out = self.dropout(out)
         
         # Select output heads
