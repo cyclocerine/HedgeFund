@@ -21,6 +21,7 @@ from ..data.preprocessor import DataPreprocessor
 from .builder import ModelBuilder
 from .tuner import HyperparameterTuner
 from .patchtst_model import PatchTSTWrapper, ImprovedPatchTSTWrapper, patchtst_hyperparameter_search
+from .patch_lstm import PatchLSTMWrapper
 
 # Try to import ensemble model
 try:
@@ -192,7 +193,7 @@ class StockPredictor:
             )
             return None
         
-        elif self.model_type in ['patchtst', 'improved_patchtst']:
+        elif self.model_type in ['patchtst', 'improved_patchtst', 'plstm']:
             if self.tune_hyperparameters:
                 param_grid = {
                     'patch_len': [8, 16, 32],
@@ -205,16 +206,35 @@ class StockPredictor:
                 }
                 if self.patchtst_param_grid:
                     param_grid.update(self.patchtst_param_grid)
+                
+                # Define robust default parameters (Baseline)
+                default_params = {
+                    'patch_len': 16,
+                    'stride': 8,
+                    'd_model': 128,
+                    'n_heads': 4,
+                    'n_layers': 2,
+                    'dropout': 0.1,
+                    'lr': 0.001
+                }
+                
                 self.model, best_params, best_score = patchtst_hyperparameter_search(
                     X_train, y_train, X_val, y_val,
                     param_grid=param_grid,
                     max_trials=10,
                     log_dir=self.log_dir,
-                    progress_callback=self.progress_callback
+                    progress_callback=self.progress_callback,
+                    default_params=default_params
                 )
             else:
+                if self.model_type == 'plstm':
+                    self.model = PatchLSTMWrapper(
+                        input_dim=self.X.shape[2],
+                        forecast_horizons=self.forecast_horizons,
+                        progress_callback=self.progress_callback
+                    )
                 # Use improved PatchTST with positional encoding
-                if self.model_type == 'improved_patchtst':
+                elif self.model_type == 'improved_patchtst':
                     self.model = ImprovedPatchTSTWrapper(
                         input_dim=self.X.shape[2],
                         forecast_horizons=self.forecast_horizons,
@@ -289,7 +309,7 @@ class StockPredictor:
             self.progress_callback(10, "Memulai prediksi...")
         
         # Check if using ensemble or improved model
-        if self.use_ensemble or isinstance(self.model, (ImprovedPatchTSTWrapper,)):
+        if self.use_ensemble or isinstance(self.model, (ImprovedPatchTSTWrapper, PatchLSTMWrapper)):
             y_pred = self.model.predict(self.X, horizon=horizon)
             if y_pred.ndim > 1:
                 y_pred = y_pred[:, 0]  # Take first column for comparison
@@ -319,7 +339,7 @@ class StockPredictor:
             self.progress_callback(50, "Membuat forecast...")
         
         # Generate forecast
-        if horizon is not None and hasattr(self.model, 'predict') and isinstance(self.model, (ImprovedPatchTSTWrapper,)):
+        if horizon is not None and hasattr(self.model, 'predict') and isinstance(self.model, (ImprovedPatchTSTWrapper, PatchLSTMWrapper)):
             # Direct multi-step forecasting
             last_sequence = self.X[-1:].copy()
             forecast = self.model.predict(last_sequence, horizon=horizon)
@@ -373,8 +393,8 @@ class StockPredictor:
         if horizons is None:
             horizons = self.forecast_horizons
         
-        if not isinstance(self.model, (ImprovedPatchTSTWrapper, )):
-            raise ValueError("Direct multi-step forecasting requires ImprovedPatchTST model")
+        if not isinstance(self.model, (ImprovedPatchTSTWrapper, PatchLSTMWrapper)):
+            raise ValueError("Direct multi-step forecasting requires ImprovedPatchTST or PatchLSTM model")
         
         results = {}
         last_sequence = self.X[-1:].copy()

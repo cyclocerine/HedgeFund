@@ -1,0 +1,9 @@
+{
+    "initial_investment": 100000000,
+    "final_value": 151053446.75690857,
+    "total_return": 51.05344675690856,
+    "max_drawdown": 36.137340844522555,
+    "sharpe_ratio": 0.4143479132682868,
+    "win_rate": 13.432835820895523,
+    "num_trades": 670
+}

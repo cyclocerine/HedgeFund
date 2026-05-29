@@ -48,7 +48,7 @@ except ImportError:
 from src.models.predictor import StockPredictor
 from src.trading.backtest import Backtester
 from src.trading.optimizer import StrategyOptimizer
-from src.trading.ppo_agent import PPOTrader
+from src.trading.ppo_agent import PPOTrader, VectorizedTradingEnv, HybridActorCritic
 
 # Inisialisasi console untuk tampilan yang lebih menarik
 console = Console() if RICH_AVAILABLE else None
@@ -468,7 +468,7 @@ def save_backtest_results(predictor, backtest_results, args):
     except Exception as e:
         print_warning(f"Gagal menyimpan hasil backtest: {str(e)}")
 
-def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, verbose=True, tune=False):
+def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, verbose=True, tune=False, train_noise_level=0.0):
     """
     Run PPO backtest with enhanced features - consistent with predict mode.
     
@@ -486,6 +486,8 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
         Print training progress
     tune : bool
         Enable hyperparameter tuning for PPO agent
+    train_noise_level : float
+        Noise injection level for PPO training (0.0-0.1)
         
     Returns:
     --------
@@ -502,6 +504,14 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     except ImportError:
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
+
+    # Prepare macro features
+    macro_features = None
+    if use_enhanced and ohlcv_df is not None:
+        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
+        if all(col in ohlcv_df.columns for col in macro_cols):
+            macro_features = ohlcv_df[macro_cols].values
+            print_info("Mengintegrasikan 4 Macro Features (VIX, NASDAQ, DJI, TNX)")
     
     # PPO Hyperparameter tuning
     if tune:
@@ -527,7 +537,9 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
                 prices=prices,
                 initial_investment=initial_investment,
                 use_enhanced_features=use_enhanced,
-                ohlcv_df=ohlcv_df
+                ohlcv_df=ohlcv_df,
+                train_noise_level=train_noise_level,
+                macro_features=macro_features
             )
             
             # Apply hyperparameters - use correct attribute names
@@ -553,7 +565,9 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             prices=prices,
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
-            ohlcv_df=ohlcv_df
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
         
         # Apply best hyperparameters
@@ -568,7 +582,9 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
             prices=prices,
             initial_investment=initial_investment,
             use_enhanced_features=use_enhanced,
-            ohlcv_df=ohlcv_df
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
         
         # Train agent
@@ -641,29 +657,64 @@ def run_ppo_backtest(prices, initial_investment, episodes=200, ohlcv_df=None, ve
     return portfolio_values, trades, performance
 
 
-def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None):
+def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes=30, ohlcv_df=None, train_noise_level=0.0, ticker="UNKNOWN", force_retrain=False, model_dir="saved_models", vectorized=False, n_envs=8, hybrid_ac=False):
     """Generate trading signals menggunakan PPO agent dengan enhanced features"""
-    print_info(f"Melatih PPO agent ({episodes} episodes) untuk menghasilkan sinyal trading...")
+    
+    # Display training mode
+    mode_info = []
+    if vectorized:
+        mode_info.append(f"Vectorized ({n_envs} envs)")
+    if hybrid_ac:
+        mode_info.append("Hybrid AC (LSTM memory)")
+    mode_str = " + ".join(mode_info) if mode_info else "Standard"
+    
+    print_info(f"Melatih PPO agent ({episodes} episodes, {mode_str}) untuk menghasilkan sinyal trading...")
+    
+    # Model path resolution - include mode in filename for cache separation
+    mode_suffix = ""
+    if vectorized:
+        mode_suffix += "_vec"
+    if hybrid_ac:
+        mode_suffix += "_hybrid"
+    model_path = os.path.join(model_dir, "ppo", f"{ticker}_enhanced_v2.3{mode_suffix}.pt")
     
     # Check if enhanced features available
     try:
         from src.data.feature_engineering import TradingFeatureEngineer
-        use_enhanced = True
-        print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+        use_enhanced = ohlcv_df is not None
+        if use_enhanced:
+            print_info("Menggunakan Enhanced Features (MACD, Stoch RSI, BB, Volume scores)")
+            if train_noise_level > 0:
+                print_info(f"Noise Injection: {train_noise_level*100:.1f}%")
     except ImportError:
         use_enhanced = False
         print_warning("Enhanced features tidak tersedia, menggunakan legacy mode")
+                
+    # Prepare macro features
+    macro_features = None
+    if use_enhanced and ohlcv_df is not None:
+        macro_cols = ['macro_ixic', 'macro_dji', 'macro_tnx', 'macro_vix']
+        if all(col in ohlcv_df.columns for col in macro_cols):
+            macro_features = ohlcv_df[macro_cols].values
+            print_info("Mengintegrasikan 4 Macro Features (VIX, NASDAQ, DJI, TNX)")
+        else:
+            # Fallback for when macro data fetch fails (network issues)
+            # This ensures we still produce 17 features to match the saved model
+            print_warning("Macro data missing (timeout/error). Using zero-padding for compatibility.")
+            macro_features = np.zeros((len(ohlcv_df), 4))
     
-    # Setup PPO with enhanced or legacy features
+    # Create PPOTrader based on available features
     if use_enhanced and ohlcv_df is not None:
         ppo_trader = PPOTrader(
             prices=prices,
             initial_investment=initial_investment,
             use_enhanced_features=True,
-            ohlcv_df=ohlcv_df
+            ohlcv_df=ohlcv_df,
+            train_noise_level=train_noise_level,
+            macro_features=macro_features
         )
     else:
-        # Legacy mode - buat features sederhana
+        # Prepare legacy features
         import pandas as pd
         df = pd.DataFrame({'Close': prices})
         df['Daily_Return'] = df['Close'].pct_change().fillna(0)
@@ -683,9 +734,22 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
             initial_investment=initial_investment
         )
     
-    # Train PPO agent
-    ppo_trader.train(episodes=episodes, verbose=True)
-    print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
+    # Load or Train PPO agent
+    if os.path.exists(model_path) and not force_retrain:
+        print_info(f"Loading saved PPO model from {model_path}")
+        ppo_trader.load(model_path)
+        print_success(f"PPO model loaded successfully!")
+    else:
+        # Train PPO agent - use vectorized if requested
+        if vectorized:
+            print_info(f"Using Vectorized Training with {n_envs} parallel environments...")
+            ppo_trader.train_vectorized(episodes=episodes, n_envs=n_envs, verbose=True)
+            print_success(f"PPO agent selesai dilatih (Vectorized, {episodes} episodes, {n_envs}x speedup)")
+        else:
+            ppo_trader.train(episodes=episodes, verbose=True)
+            print_success(f"PPO agent selesai dilatih ({episodes} episodes)")
+        # Save trained model
+        ppo_trader.save(model_path)
     
     # Backtest untuk mendapatkan performance
     backtest_results = ppo_trader.backtest()
@@ -698,29 +762,31 @@ def generate_ppo_signals(prices, forecast, initial_investment=10000000, episodes
     actions = backtest_results['actions']
     
     for i in range(len(forecast)):
-        # Ambil action terakhir dari training
-        if len(actions) > 0:
-            recent_actions = actions[-min(20, len(actions)):]
-            # Hitung probabilitas action
-            buy_count = sum(1 for a in recent_actions if a == 1)
-            sell_count = sum(1 for a in recent_actions if a == 2)
-            total = len(recent_actions)
-            
-            buy_prob = buy_count / total
-            sell_prob = sell_count / total
-            
-            if buy_prob > 0.4:
-                signal_action = 'buy'
-                confidence = 50 + buy_prob * 50
-            elif sell_prob > 0.4:
-                signal_action = 'sell'
-                confidence = 50 + sell_prob * 50
+        # Generate signal using TRAINED MODEL's softmax output
+        import torch
+        
+        # Get last observation from trained environment
+        state = ppo_trader.env._get_observation()
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(ppo_trader.agent.device)
+        
+        # Get action probabilities from trained network
+        with torch.no_grad():
+            if getattr(ppo_trader.agent, 'use_hybrid', False):
+                mu, std, _, _, _ = ppo_trader.agent.network(state_tensor)
             else:
-                signal_action = 'hold'
-                confidence = 50
+                mu, std, _ = ppo_trader.agent.network(state_tensor)
+            action_value = float(mu.cpu().numpy().flatten()[0])
+        
+        # Determine signal based on continuous action
+        if action_value > 0.05:
+            signal_action = 'buy'
+            confidence = min(action_value * 100, 100.0)
+        elif action_value < -0.05:
+            signal_action = 'sell'
+            confidence = min(abs(action_value) * 100, 100.0)
         else:
             signal_action = 'hold'
-            confidence = 50
+            confidence = 50.0
         
         signals.append({
             'action': signal_action,
@@ -737,13 +803,14 @@ def parse_args():
     parser.add_argument("--mode", required=True, choices=["predict", "backtest"], help="Mode operasi: predict atau backtest")
     
     # Parameter opsional
-    parser.add_argument("--model", default="patchtst", choices=["patchtst", "improved_patchtst", "ensemble"], help="Model prediksi: patchtst, improved_patchtst, atau ensemble")
-    parser.add_argument("--ensemble", action="store_true", help="Gunakan ensemble model (PatchTST + BiLSTM + XGBoost)")
+    parser.add_argument("--model", default="plstm", choices=["plstm", "patchtst", "improved_patchtst", "ensemble"], help="Model prediksi: plstm (default), patchtst, improved_patchtst, atau ensemble")
+    parser.add_argument("--ensemble", action="store_true", help="Gunakan ensemble model (PatchTST/PLSTM + BiLSTM + XGBoost)")
     parser.add_argument("--start-date", help="Tanggal awal data (YYYY-MM-DD)")
     parser.add_argument("--end-date", help="Tanggal akhir data (YYYY-MM-DD)")
     parser.add_argument("--tune", action="store_true", help="Aktifkan hyperparameter tuning")
     parser.add_argument("--ppo", action="store_true", help="Aktifkan PPO trading signals")
     parser.add_argument("--ppo-episodes", type=int, default=200, help="Jumlah episode training PPO (default: 200)")
+    parser.add_argument("--train-noise", type=float, default=0.0, help="Noise injection level for PPO training (0.0-0.1, default: 0.0)")
     parser.add_argument("--save-results", action="store_true", help="Simpan hasil prediksi")
     
     # Parameter lookback dan forecast
@@ -754,6 +821,18 @@ def parse_args():
     parser.add_argument("--strategy", default="PPO", choices=["Trend Following", "Mean Reversion", "Predictive", "PPO"], help="Strategi trading")
     parser.add_argument("--optimize", action="store_true", help="Aktifkan optimasi parameter strategi")
     parser.add_argument("--initial-balance", type=float, default=100000000, help="Modal awal untuk backtest")
+    
+    # Model Persistence
+    parser.add_argument("--force-retrain", action="store_true", help="Force retraining model even if saved model exists")
+    parser.add_argument("--model-dir", default="saved_models", help="Directory for saved models (default: saved_models)")
+    
+    # Advanced PPO Features (V2.3)
+    parser.add_argument("--vectorized", action="store_true", help="Gunakan Vectorized Training untuk speedup (4-8x lebih cepat)")
+    parser.add_argument("--n-envs", type=int, default=8, help="Jumlah parallel environments untuk vectorized training (default: 8)")
+    parser.add_argument("--hybrid-ac", action="store_true", help="Gunakan Hybrid Actor-Critic dengan LSTM memory")
+    parser.add_argument("--plstm", action="store_true", help="Gunakan P-LSTM untuk forecasting (alternatif PatchTST)")
+    parser.add_argument("--cross-ticker", action="store_true", help="Aktifkan cross-ticker training untuk generalisasi")
+    parser.add_argument("--cross-tickers", nargs="+", default=None, help="Daftar ticker untuk cross-ticker training (default: NVDA AAPL MSFT TSLA GOOGL)")
     
     args = parser.parse_args()
     
@@ -777,7 +856,17 @@ def main():
     print_info(f"Model: {args.model.upper()}")
     print_info(f"Lookback: {args.lookback} hari, Forecast: {args.forecast_days} hari")
     if args.ppo:
-        print_info("PPO Trading Signals: Aktif")
+        ppo_mode = []
+        if args.vectorized:
+            ppo_mode.append(f"Vectorized ({args.n_envs} envs)")
+        if args.hybrid_ac:
+            ppo_mode.append("Hybrid AC (LSTM memory)")
+        if args.cross_ticker:
+            ppo_mode.append("Cross-Ticker")
+        mode_str = " + ".join(ppo_mode) if ppo_mode else "Standard"
+        print_info(f"PPO Trading Signals: Aktif ({mode_str})")
+    if args.plstm or args.model == 'plstm':
+        print_info("Forecasting Model: P-LSTM (Patch-LSTM)")
     if args.mode == 'backtest':
         print_info(f"Strategy: {args.strategy}")
         print_info(f"Initial Balance: Rp {args.initial_balance:,.0f}")
@@ -805,6 +894,8 @@ def main():
                 use_ensemble = args.ensemble or args.model == 'ensemble'
                 if use_ensemble:
                     model_type = 'patchtst'  # Base model for ensemble
+                if args.plstm:
+                    model_type = 'plstm'
                 
                 predictor = StockPredictor(
                     ticker=args.ticker,
@@ -862,6 +953,8 @@ def main():
             use_ensemble = args.ensemble or args.model == 'ensemble'
             if use_ensemble:
                 model_type = 'patchtst'  # Base model for ensemble
+            if args.plstm:
+                model_type = 'plstm'
             
             predictor = StockPredictor(
                 ticker=args.ticker,
@@ -912,7 +1005,14 @@ def main():
                     y_true, forecast, 
                     initial_investment=int(args.initial_balance),
                     episodes=args.ppo_episodes,
-                    ohlcv_df=ohlcv_df
+                    ohlcv_df=ohlcv_df,
+                    train_noise_level=args.train_noise,
+                    ticker=args.ticker,
+                    force_retrain=args.force_retrain,
+                    model_dir=args.model_dir,
+                    vectorized=args.vectorized,
+                    n_envs=args.n_envs,
+                    hybrid_ac=args.hybrid_ac
                 )
                 
                 # Print PPO backtest results
@@ -949,7 +1049,8 @@ def main():
                     episodes=episodes,
                     ohlcv_df=ohlcv_df,
                     verbose=True,
-                    tune=args.tune if hasattr(args, 'tune') else False
+                    tune=args.tune if hasattr(args, 'tune') else False,
+                    train_noise_level=args.train_noise if hasattr(args, 'train_noise') else 0.0
                 )
             else:
                 # Use traditional backtester for other strategies

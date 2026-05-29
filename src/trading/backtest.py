@@ -113,6 +113,11 @@ class Backtester:
             else:
                 volatility = 0.02  # Default jika tidak cukup data
                 
+            # Kalkulasi Slippage Dinamis (Market Impact)
+            base_slippage = 0.0005 # 0.05% dasar
+            slippage_multiplier = 0.1
+            slippage = base_slippage + (volatility * slippage_multiplier)
+                
             # Penanganan sinyal
             if signal == 'BUY':
                 # Batas ukuran posisi dari parameter
@@ -124,7 +129,8 @@ class Backtester:
                     'symbol': 'SYMBOL',
                     'action': 'BUY',
                     'size': position_size,
-                    'volatility': volatility
+                    'volatility': volatility,
+                    'slippage': slippage
                 })
                 
             elif signal == 'SELL':
@@ -132,7 +138,8 @@ class Backtester:
                     'symbol': 'SYMBOL',
                     'action': 'SELL',
                     'size': 1.0,  # Jual semua
-                    'volatility': volatility
+                    'volatility': volatility,
+                    'slippage': slippage
                 })
                 
             elif signal == 'SHORT' and allow_short:
@@ -145,7 +152,8 @@ class Backtester:
                     'symbol': 'SYMBOL',
                     'action': 'SHORT',
                     'size': position_size,
-                    'volatility': volatility
+                    'volatility': volatility,
+                    'slippage': slippage
                 })
                 
             elif signal == 'COVER' and allow_short:
@@ -153,7 +161,8 @@ class Backtester:
                     'symbol': 'SYMBOL',
                     'action': 'COVER',
                     'size': 1.0,  # Tutup semua posisi short
-                    'volatility': volatility
+                    'volatility': volatility,
+                    'slippage': slippage
                 })
             
             # Jalankan alokasi kapital
@@ -270,30 +279,39 @@ class Backtester:
                 else:
                     volatility = 0.02
                 
+                # Kalkulasi Slippage Dinamis (Market Impact)
+                base_slippage = 0.0005 # 0.05% dasar
+                slippage_multiplier = 0.1
+                slippage = base_slippage + (volatility * slippage_multiplier)
+                
                 # Konversi sinyal
                 if signal == 'BUY':
                     trading_signals.append({
                         'symbol': symbol,
                         'action': 'BUY',
-                        'volatility': volatility
+                        'volatility': volatility,
+                        'slippage': slippage
                     })
                 elif signal == 'SELL':
                     trading_signals.append({
                         'symbol': symbol,
                         'action': 'SELL',
-                        'volatility': volatility
+                        'volatility': volatility,
+                        'slippage': slippage
                     })
                 elif signal == 'SHORT':
                     trading_signals.append({
                         'symbol': symbol,
                         'action': 'SHORT',
-                        'volatility': volatility
+                        'volatility': volatility,
+                        'slippage': slippage
                     })
                 elif signal == 'COVER':
                     trading_signals.append({
                         'symbol': symbol,
                         'action': 'COVER',
-                        'volatility': volatility
+                        'volatility': volatility,
+                        'slippage': slippage
                     })
             
             # Update portfolio jika ada harga

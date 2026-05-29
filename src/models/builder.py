@@ -38,10 +38,8 @@ class ModelBuilder:
             'd_model': 128,
             'n_heads': 4,
             'n_layers': 3,
-            'd_ff': 256,
             'dropout': 0.1,
             'lr': 1e-3,
-            'use_revin': True
         }
         
         # Override dengan kwargs

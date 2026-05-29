@@ -138,6 +138,9 @@ class MultiAssetPortfolio:
             # Default volatility jika tidak ada
             volatility = signal.get('volatility', 0.02)
             
+            # Ambil slippage jika ada, default 0
+            slippage = signal.get('slippage', 0.0)
+            
             # Ukuran posisi dari sinyal atau hitung otomatis
             if 'size' in signal:
                 position_size = signal['size']
@@ -148,19 +151,19 @@ class MultiAssetPortfolio:
             
             # Execute order
             if action == 'BUY':
-                order_result = self._execute_buy(symbol, current_price, position_size, portfolio_value, timestamp)
+                order_result = self._execute_buy(symbol, current_price, position_size, portfolio_value, timestamp, slippage)
                 if order_result:
                     executed_orders.append(order_result)
             elif action == 'SELL':
-                order_result = self._execute_sell(symbol, current_price, position_size, timestamp)
+                order_result = self._execute_sell(symbol, current_price, position_size, timestamp, slippage)
                 if order_result:
                     executed_orders.append(order_result)
             elif action == 'SHORT':
-                order_result = self._execute_short(symbol, current_price, position_size, portfolio_value, timestamp)
+                order_result = self._execute_short(symbol, current_price, position_size, portfolio_value, timestamp, slippage)
                 if order_result:
                     executed_orders.append(order_result)
             elif action == 'COVER':
-                order_result = self._execute_cover(symbol, current_price, position_size, timestamp)
+                order_result = self._execute_cover(symbol, current_price, position_size, timestamp, slippage)
                 if order_result:
                     executed_orders.append(order_result)
         
@@ -169,7 +172,7 @@ class MultiAssetPortfolio:
             'executed_orders': executed_orders
         }
     
-    def _execute_buy(self, symbol, price, position_size, portfolio_value, timestamp=None):
+    def _execute_buy(self, symbol, price, position_size, portfolio_value, timestamp=None, slippage=0.0):
         """
         Eksekusi pembelian aset
         
@@ -185,6 +188,8 @@ class MultiAssetPortfolio:
             Nilai portofolio saat ini
         timestamp : datetime, optional
             Timestamp untuk transaksi ini
+        slippage : float, optional
+            Persentase slippage untuk simulasi eksekusi (meningkatkan harga beli)
             
         Returns:
         --------
@@ -194,6 +199,8 @@ class MultiAssetPortfolio:
         if timestamp is None:
             timestamp = datetime.now()
             
+        execution_price = price * (1 + slippage)
+            
         # Hitung jumlah yang akan digunakan
         available_cash = min(self.cash, portfolio_value * position_size)
         
@@ -201,8 +208,8 @@ class MultiAssetPortfolio:
             return None
             
         # Hitung jumlah saham yang dapat dibeli
-        shares_to_buy = available_cash / (price * (1 + self.transaction_fee))
-        cost = shares_to_buy * price
+        shares_to_buy = available_cash / (execution_price * (1 + self.transaction_fee))
+        cost = shares_to_buy * execution_price
         fee = cost * self.transaction_fee
         
         # Update cash
@@ -220,10 +227,10 @@ class MultiAssetPortfolio:
             # Buat posisi baru
             self.positions[symbol] = {
                 'shares': shares_to_buy,
-                'entry_price': price,
+                'entry_price': execution_price,
                 'type': 'LONG',
                 'entry_date': timestamp,
-                'high_price': price  # Untuk trailing stop
+                'high_price': execution_price  # Untuk trailing stop
             }
         
         # Catat transaksi
@@ -232,6 +239,8 @@ class MultiAssetPortfolio:
             'symbol': symbol,
             'action': 'BUY',
             'price': price,
+            'execution_price': execution_price,
+            'slippage': slippage,
             'shares': shares_to_buy,
             'value': cost,
             'fee': fee,
@@ -242,7 +251,7 @@ class MultiAssetPortfolio:
         
         return transaction
     
-    def _execute_sell(self, symbol, price, position_size=1.0, timestamp=None):
+    def _execute_sell(self, symbol, price, position_size=1.0, timestamp=None, slippage=0.0):
         """
         Eksekusi penjualan aset
         
@@ -256,6 +265,8 @@ class MultiAssetPortfolio:
             Persentase posisi yang akan dijual (1.0 = 100%)
         timestamp : datetime, optional
             Timestamp untuk transaksi ini
+        slippage : float, optional
+            Persentase slippage (menurunkan harga jual)
             
         Returns:
         --------
@@ -265,19 +276,21 @@ class MultiAssetPortfolio:
         if timestamp is None:
             timestamp = datetime.now()
             
+        execution_price = price * (1 - slippage)
+            
         # Periksa apakah memiliki posisi
         if symbol not in self.positions or self.positions[symbol]['type'] != 'LONG':
             return None
             
         # Hitung jumlah saham yang akan dijual
         shares_to_sell = self.positions[symbol]['shares'] * position_size
-        value = shares_to_sell * price
+        value = shares_to_sell * execution_price
         fee = value * self.transaction_fee
         
         # Hitung realized P&L
         entry_value = shares_to_sell * self.positions[symbol]['entry_price']
         realized_pnl = value - entry_value - fee
-        realized_pnl_pct = (price / self.positions[symbol]['entry_price'] - 1) * 100 - (self.transaction_fee * 100)
+        realized_pnl_pct = (execution_price / self.positions[symbol]['entry_price'] - 1) * 100 - (self.transaction_fee * 100)
         
         # Update cash
         self.cash += (value - fee)
@@ -294,6 +307,8 @@ class MultiAssetPortfolio:
             'symbol': symbol,
             'action': 'SELL',
             'price': price,
+            'execution_price': execution_price,
+            'slippage': slippage,
             'shares': shares_to_sell,
             'value': value,
             'fee': fee,
@@ -306,7 +321,7 @@ class MultiAssetPortfolio:
         
         return transaction
     
-    def _execute_short(self, symbol, price, position_size, portfolio_value, timestamp=None):
+    def _execute_short(self, symbol, price, position_size, portfolio_value, timestamp=None, slippage=0.0):
         """
         Eksekusi short selling aset
         
@@ -322,6 +337,8 @@ class MultiAssetPortfolio:
             Nilai portofolio saat ini
         timestamp : datetime, optional
             Timestamp untuk transaksi ini
+        slippage : float, optional
+            Persentase slippage (menurunkan harga jual short)
             
         Returns:
         --------
@@ -331,11 +348,13 @@ class MultiAssetPortfolio:
         if timestamp is None:
             timestamp = datetime.now()
             
+        execution_price = price * (1 - slippage)
+            
         # Hitung jumlah yang akan digunakan
         short_value = portfolio_value * position_size
         
         # Hitung jumlah saham yang dapat di-short
-        shares_to_short = short_value / price
+        shares_to_short = short_value / execution_price
         fee = short_value * self.transaction_fee
         
         # Untuk short, kita mendapatkan uang dari pinjaman saham
@@ -353,10 +372,10 @@ class MultiAssetPortfolio:
             # Buat posisi baru
             self.positions[symbol] = {
                 'shares': shares_to_short,
-                'entry_price': price,
+                'entry_price': execution_price,
                 'type': 'SHORT',
                 'entry_date': timestamp,
-                'low_price': price  # Untuk trailing stop
+                'low_price': execution_price  # Untuk trailing stop
             }
         
         # Catat transaksi
@@ -365,6 +384,8 @@ class MultiAssetPortfolio:
             'symbol': symbol,
             'action': 'SHORT',
             'price': price,
+            'execution_price': execution_price,
+            'slippage': slippage,
             'shares': shares_to_short,
             'value': short_value,
             'fee': fee,
@@ -375,7 +396,7 @@ class MultiAssetPortfolio:
         
         return transaction
     
-    def _execute_cover(self, symbol, price, position_size=1.0, timestamp=None):
+    def _execute_cover(self, symbol, price, position_size=1.0, timestamp=None, slippage=0.0):
         """
         Tutup posisi short
         
@@ -389,6 +410,8 @@ class MultiAssetPortfolio:
             Persentase posisi yang akan ditutup (1.0 = 100%)
         timestamp : datetime, optional
             Timestamp untuk transaksi ini
+        slippage : float, optional
+            Persentase slippage (meningkatkan harga beli)
             
         Returns:
         --------
@@ -398,19 +421,21 @@ class MultiAssetPortfolio:
         if timestamp is None:
             timestamp = datetime.now()
             
+        execution_price = price * (1 + slippage)
+            
         # Periksa apakah memiliki posisi short
         if symbol not in self.positions or self.positions[symbol]['type'] != 'SHORT':
             return None
             
         # Hitung jumlah saham yang akan ditutup
         shares_to_cover = self.positions[symbol]['shares'] * position_size
-        cover_cost = shares_to_cover * price
+        cover_cost = shares_to_cover * execution_price
         fee = cover_cost * self.transaction_fee
         
         # Hitung realized P&L
         entry_value = shares_to_cover * self.positions[symbol]['entry_price']
         realized_pnl = entry_value - cover_cost - fee
-        realized_pnl_pct = (self.positions[symbol]['entry_price'] / price - 1) * 100 - (self.transaction_fee * 100)
+        realized_pnl_pct = (self.positions[symbol]['entry_price'] / execution_price - 1) * 100 - (self.transaction_fee * 100)
         
         # Update cash
         self.cash -= (cover_cost + fee)
@@ -427,6 +452,8 @@ class MultiAssetPortfolio:
             'symbol': symbol,
             'action': 'COVER',
             'price': price,
+            'execution_price': execution_price,
+            'slippage': slippage,
             'shares': shares_to_cover,
             'value': cover_cost,
             'fee': fee,
